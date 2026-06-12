@@ -1,0 +1,16 @@
+[package]
+name = "rolio-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+rolio-core.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+tokio.workspace = true
+time.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "rolio-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+time.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
