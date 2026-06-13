@@ -21,6 +21,10 @@ impl Revision {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
 }
 
 impl Default for Revision {
@@ -231,3 +235,5 @@ pub trait MemoryStore: Send + Sync {
 pub(crate) mod contracts;
 #[cfg(test)]
 pub(crate) mod fake;
+#[cfg(feature = "store-postgres")]
+pub mod postgres;

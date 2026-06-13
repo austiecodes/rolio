@@ -8,6 +8,11 @@ impl Confidence {
     pub const fn as_f32(self) -> f32 {
         self.0 as f32 / 10.0
     }
+
+    /// The stored number of tenths; exact in integer domains.
+    pub const fn tenths(self) -> u8 {
+        self.0
+    }
 }
 
 impl Default for Confidence {

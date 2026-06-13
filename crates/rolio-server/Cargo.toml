@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[features]
+default = []
+# The PostgreSQL storage adapter. Selected explicitly by server configuration.
+store-postgres = ["dep:sqlx", "dep:sha2"]
+
 [dependencies]
 async-trait.workspace = true
 rolio-core.workspace = true
@@ -11,6 +16,8 @@ thiserror.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 time.workspace = true
+sqlx = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [lints]
 workspace = true

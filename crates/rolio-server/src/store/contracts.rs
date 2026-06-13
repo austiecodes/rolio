@@ -7,12 +7,16 @@ use time::OffsetDateTime;
 use super::*;
 
 pub(crate) fn identity() -> StoreIdentity {
+    identity_with(size(2))
+}
+
+pub(crate) fn identity_with(dimensions: NonZeroUsize) -> StoreIdentity {
     StoreIdentity {
         schema_version: 1,
         embedding_profile: EmbeddingProfile {
             model: "contract-fixture".into(),
             artifact_digest: [0; 32],
-            dimensions: size(2),
+            dimensions,
             distance: DistanceMetric::Cosine,
             document_preprocessing: "identity".into(),
             query_preprocessing: "identity".into(),
@@ -30,7 +34,14 @@ fn scope(key: &str) -> Scope {
     Scope::Project(ProjectKey::new(key).unwrap())
 }
 
-fn create(scope: Scope, content: &str, values: Vec<f32>) -> WriteRequest {
+/// A test vector with its meaningful part in the first two dimensions.
+fn values(x: f32, y: f32, dimensions: usize) -> Vec<f32> {
+    let mut vector = vec![x, y];
+    vector.resize(dimensions, 0.0);
+    vector
+}
+
+fn create(scope: Scope, content: &str, vector: Vec<f32>) -> WriteRequest {
     WriteRequest {
         memory: Memory {
             id: MemoryId::new(),
@@ -46,26 +57,26 @@ fn create(scope: Scope, content: &str, values: Vec<f32>) -> WriteRequest {
             created_at: OffsetDateTime::UNIX_EPOCH,
             updated_at: OffsetDateTime::UNIX_EPOCH,
         },
-        vector: Vector::new(values).unwrap(),
+        vector: Vector::new(vector).unwrap(),
         condition: WriteCondition::Absent,
     }
 }
 
-fn replace(record: &StoredMemory, content: &str, values: Vec<f32>) -> WriteRequest {
+fn replace(record: &StoredMemory, content: &str, vector: Vec<f32>) -> WriteRequest {
     let mut memory = record.memory.clone();
     memory.content = content.into();
     memory.updated_at += time::Duration::seconds(1);
     WriteRequest {
         memory,
-        vector: Vector::new(values).unwrap(),
+        vector: Vector::new(vector).unwrap(),
         condition: WriteCondition::Revision(record.revision),
     }
 }
 
-async fn search(store: &dyn MemoryStore, scopes: Vec<Scope>) -> Vec<SearchHit> {
+async fn search(store: &dyn MemoryStore, scopes: Vec<Scope>, dimensions: usize) -> Vec<SearchHit> {
     store
         .search(SearchRequest {
-            vector: Vector::new(vec![1.0, 0.0]).unwrap(),
+            vector: Vector::new(values(1.0, 0.0, dimensions)).unwrap(),
             scopes,
             limit: size(10),
         })
@@ -74,40 +85,50 @@ async fn search(store: &dyn MemoryStore, scopes: Vec<Scope>) -> Vec<SearchHit> {
 }
 
 pub(crate) async fn run(store: &dyn MemoryStore) {
-    identity_checks(store).await;
-    lifecycle(store).await;
-    concurrent_conditions(store).await;
-    invalid_writes_leave_record_unchanged(store).await;
-    scoped_pagination(store).await;
-    scoped_search(store).await;
+    run_with_dimensions(store, 2).await;
 }
 
-async fn identity_checks(store: &dyn MemoryStore) {
-    store.check(&identity()).await.unwrap();
-    let mut wrong = identity();
+/// Run the shared contract at a fixed vector width. Real adapters verify the
+/// width they are actually deployed with.
+pub(crate) async fn run_with_dimensions(store: &dyn MemoryStore, dimensions: usize) {
+    identity_checks(store, dimensions).await;
+    lifecycle(store, dimensions).await;
+    concurrent_conditions(store, dimensions).await;
+    invalid_writes_leave_record_unchanged(store, dimensions).await;
+    scoped_pagination(store, dimensions).await;
+    scoped_search(store, dimensions).await;
+}
+
+async fn identity_checks(store: &dyn MemoryStore, dimensions: usize) {
+    let identity = identity_with(size(dimensions));
+    store.check(&identity).await.unwrap();
+    let mut wrong = identity.clone();
     wrong.schema_version += 1;
     assert_eq!(
         store.check(&wrong).await,
         Err(StoreError::IncompatibleIdentity)
     );
-    wrong = identity();
+    wrong = identity.clone();
     wrong.embedding_profile.artifact_digest[0] = 1;
     assert_eq!(
         store.check(&wrong).await,
         Err(StoreError::IncompatibleIdentity)
     );
-    wrong = identity();
+    wrong = identity;
     wrong.embedding_profile.query_preprocessing = "different-prefix".into();
     assert_eq!(
         store.check(&wrong).await,
         Err(StoreError::IncompatibleIdentity)
     );
-    store.check(&identity()).await.unwrap();
 }
 
-async fn lifecycle(store: &dyn MemoryStore) {
+async fn lifecycle(store: &dyn MemoryStore, dimensions: usize) {
     let selected = scope("contract-lifecycle");
-    let request = create(selected.clone(), "Original content", vec![1.0, 0.0]);
+    let request = create(
+        selected.clone(),
+        "Original content",
+        values(1.0, 0.0, dimensions),
+    );
     let id = request.memory.id;
     assert!(store.get(id).await.unwrap().is_none());
     let original = store.write(request.clone()).await.unwrap();
@@ -117,13 +138,13 @@ async fn lifecycle(store: &dyn MemoryStore) {
     assert_eq!(store.write(request).await, Err(StoreError::AlreadyExists));
     assert_eq!(store.get(id).await.unwrap(), Some(original.clone()));
 
-    let replacement = replace(&original, "Updated content", vec![0.0, 1.0]);
+    let replacement = replace(&original, "Updated content", values(0.0, 1.0, dimensions));
     let updated = store.write(replacement.clone()).await.unwrap();
     assert_ne!(updated.revision, original.revision);
     assert_eq!(updated.memory, replacement.memory);
     assert_eq!(updated.vector, replacement.vector);
     assert_eq!(store.get(id).await.unwrap(), Some(updated.clone()));
-    let hits = search(store, vec![selected.clone()]).await;
+    let hits = search(store, vec![selected.clone()], dimensions).await;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].record, updated);
 
@@ -138,24 +159,28 @@ async fn lifecycle(store: &dyn MemoryStore) {
     assert_eq!(store.get(id).await.unwrap(), Some(updated.clone()));
     store.delete(id, updated.revision).await.unwrap();
     assert!(store.get(id).await.unwrap().is_none());
-    assert!(search(store, vec![selected]).await.is_empty());
+    assert!(search(store, vec![selected], dimensions).await.is_empty());
     assert_eq!(
         store.delete(id, updated.revision).await,
         Err(StoreError::RevisionConflict)
     );
     assert_eq!(
         store
-            .write(replace(&updated, "Do not recreate", vec![1.0, 0.0]))
+            .write(replace(
+                &updated,
+                "Do not recreate",
+                values(1.0, 0.0, dimensions)
+            ))
             .await,
         Err(StoreError::RevisionConflict)
     );
 }
 
-async fn concurrent_conditions(store: &dyn MemoryStore) {
+async fn concurrent_conditions(store: &dyn MemoryStore, dimensions: usize) {
     let request = create(
         scope("contract-concurrent"),
         "Initial content",
-        vec![1.0, 0.0],
+        values(1.0, 0.0, dimensions),
     );
     let (left, right) = tokio::join!(store.write(request.clone()), store.write(request));
     let created = match (left, right) {
@@ -163,8 +188,8 @@ async fn concurrent_conditions(store: &dyn MemoryStore) {
         | (Err(StoreError::AlreadyExists), Ok(record)) => record,
         results => panic!("Exactly one create must succeed: {results:?}"),
     };
-    let first = replace(&created, "First candidate", vec![0.0, 1.0]);
-    let second = replace(&created, "Second candidate", vec![-1.0, 0.0]);
+    let first = replace(&created, "First candidate", values(0.0, 1.0, dimensions));
+    let second = replace(&created, "Second candidate", values(-1.0, 0.0, dimensions));
     let (left, right) = tokio::join!(store.write(first.clone()), store.write(second.clone()));
     let (winner, expected) = match (left, right) {
         (Ok(record), Err(StoreError::RevisionConflict)) => (record, first),
@@ -177,29 +202,33 @@ async fn concurrent_conditions(store: &dyn MemoryStore) {
     assert_eq!(store.get(created.memory.id).await.unwrap(), Some(winner));
 }
 
-async fn invalid_writes_leave_record_unchanged(store: &dyn MemoryStore) {
+async fn invalid_writes_leave_record_unchanged(store: &dyn MemoryStore, dimensions: usize) {
     let original = store
         .write(create(
             scope("contract-validation"),
             "Valid",
-            vec![1.0, 0.0],
+            values(1.0, 0.0, dimensions),
         ))
         .await
         .unwrap();
-    let mut request = replace(&original, "Different scope", vec![0.0, 1.0]);
+    let mut request = replace(&original, "Different scope", values(0.0, 1.0, dimensions));
     request.memory.scope = Scope::Global;
     assert_eq!(store.write(request).await, Err(StoreError::ScopeChange));
-    let request = replace(&original, "Wrong dimension", vec![1.0]);
+    let request = replace(
+        &original,
+        "Wrong dimension",
+        values(1.0, 0.0, dimensions - 1),
+    );
     assert_eq!(
         store.write(request).await,
         Err(StoreError::DimensionMismatch)
     );
-    let request = replace(&original, " \n\t", vec![1.0, 0.0]);
+    let request = replace(&original, " \n\t", values(1.0, 0.0, dimensions));
     assert_eq!(store.write(request).await, Err(StoreError::InvalidMemory));
     assert_eq!(store.get(original.memory.id).await.unwrap(), Some(original));
 }
 
-async fn scoped_pagination(store: &dyn MemoryStore) {
+async fn scoped_pagination(store: &dyn MemoryStore, dimensions: usize) {
     let selected = scope("contract-pages");
     let mut expected = Vec::new();
     for index in 0..5 {
@@ -207,7 +236,7 @@ async fn scoped_pagination(store: &dyn MemoryStore) {
             .write(create(
                 selected.clone(),
                 &format!("Page item {index}"),
-                vec![1.0, 0.0],
+                values(1.0, 0.0, dimensions),
             ))
             .await
             .unwrap();
@@ -217,7 +246,7 @@ async fn scoped_pagination(store: &dyn MemoryStore) {
         .write(create(
             Scope::Global,
             "Not in project pages",
-            vec![1.0, 0.0],
+            values(1.0, 0.0, dimensions),
         ))
         .await
         .unwrap();
@@ -296,20 +325,28 @@ async fn scoped_pagination(store: &dyn MemoryStore) {
     assert!(empty.next.is_none());
 }
 
-async fn scoped_search(store: &dyn MemoryStore) {
+async fn scoped_search(store: &dyn MemoryStore, dimensions: usize) {
     let selected = scope("contract/'scope:\u{6d4b}\u{8bd5}");
     let other = scope("contract-other");
     let wanted = store
-        .write(create(selected.clone(), "Selected scope", vec![0.0, 1.0]))
+        .write(create(
+            selected.clone(),
+            "Selected scope",
+            values(0.0, 1.0, dimensions),
+        ))
         .await
         .unwrap();
     let excluded = store
-        .write(create(other.clone(), "Closer but excluded", vec![1.0, 0.0]))
+        .write(create(
+            other.clone(),
+            "Closer but excluded",
+            values(1.0, 0.0, dimensions),
+        ))
         .await
         .unwrap();
     let hits = store
         .search(SearchRequest {
-            vector: Vector::new(vec![1.0, 0.0]).unwrap(),
+            vector: Vector::new(values(1.0, 0.0, dimensions)).unwrap(),
             scopes: vec![selected.clone()],
             limit: size(1),
         })
@@ -322,7 +359,7 @@ async fn scoped_search(store: &dyn MemoryStore) {
     );
     assert_eq!(hits[0].record, wanted);
     assert!(hits[0].score.is_finite());
-    let hits = search(store, vec![selected, other.clone()]).await;
+    let hits = search(store, vec![selected, other.clone()], dimensions).await;
     assert_eq!(hits.len(), 2);
     assert!(
         hits.iter()
@@ -330,7 +367,7 @@ async fn scoped_search(store: &dyn MemoryStore) {
     );
     let invalid = store
         .search(SearchRequest {
-            vector: Vector::new(vec![1.0, 0.0]).unwrap(),
+            vector: Vector::new(values(1.0, 0.0, dimensions)).unwrap(),
             scopes: vec![],
             limit: size(1),
         })
@@ -338,7 +375,7 @@ async fn scoped_search(store: &dyn MemoryStore) {
     assert!(matches!(invalid, Err(StoreError::MissingScope)));
     let invalid = store
         .search(SearchRequest {
-            vector: Vector::new(vec![1.0]).unwrap(),
+            vector: Vector::new(values(1.0, 0.0, dimensions - 1)).unwrap(),
             scopes: vec![other],
             limit: size(1),
         })
