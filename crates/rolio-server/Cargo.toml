@@ -6,18 +6,32 @@ publish = false
 
 [features]
 default = []
+# Offline, pinned local model; artifacts are installed explicitly.
+embedding-local = [
+    "dep:llama-cpp-2",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:sha2",
+]
 # The PostgreSQL storage adapter. Selected explicitly by server configuration.
 store-postgres = ["dep:sqlx", "dep:sha2"]
 
 [dependencies]
 async-trait.workspace = true
+llama-cpp-2 = { workspace = true, optional = true }
 rolio-core.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 uuid.workspace = true
 tokio.workspace = true
 time.workspace = true
 sqlx = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -8,9 +8,13 @@ edition = "2024"
 
 [workspace.dependencies]
 async-trait = "0.1"
+llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["metal"] }
 rolio-core = { path = "crates/rolio-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "time", "uuid"] }
+tempfile = "3"
 thiserror = "2"
 time = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
