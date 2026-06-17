@@ -94,6 +94,11 @@ impl MemoryService {
         Ok(())
     }
 
+    /// The embedding profile every write and search is pinned to.
+    pub fn profile(&self) -> &crate::store::EmbeddingProfile {
+        &self.identity.embedding_profile
+    }
+
     async fn embed(&self, text: &str, kind: InputKind) -> Result<Vector, MemoryError> {
         let result = self.embedding.embed(text, kind).await?;
         if result.profile != self.identity.embedding_profile {

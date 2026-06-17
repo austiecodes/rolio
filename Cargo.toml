@@ -8,6 +8,8 @@ edition = "2024"
 
 [workspace.dependencies]
 async-trait = "0.1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+base64 = "0.22"
 llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["metal"] }
 rolio-core = { path = "crates/rolio-core" }
 serde = { version = "1", features = ["derive"] }
@@ -16,8 +18,10 @@ sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "time", "uuid"] }
 tempfile = "3"
 thiserror = "2"
-time = "0.3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+time = { version = "0.3", features = ["serde"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]

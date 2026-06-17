@@ -2,5 +2,6 @@
 //! The HTTP service and CLI come later.
 
 pub mod embedding;
+pub mod http;
 pub mod memory;
 pub mod store;
