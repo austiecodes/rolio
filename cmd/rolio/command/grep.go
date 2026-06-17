@@ -9,7 +9,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewGrepCommand(adapter store.Adapter, repo string) *cobra.Command {
+func NewGrepCommand(adapter store.Adapter) *cobra.Command {
 	var regex, countOnly, filesOnly, onlyMatch bool
 	var caseInsensitive, invert, wholeWord, wholeLine bool
 	var contextAfter, contextBefore, context int
@@ -35,7 +35,6 @@ func NewGrepCommand(adapter store.Adapter, repo string) *cobra.Command {
 			}
 
 			resp, err := adapter.Grep(cmd.Context(), store.GrepRequest{
-				Repo:            repo,
 				Pattern:         pattern,
 				Path:            argPath(args[1:], "/"),
 				Regex:           regex,

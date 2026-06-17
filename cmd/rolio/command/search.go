@@ -10,7 +10,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
+func NewSearchCommand(adapter store.Adapter) *cobra.Command {
 	var searchPath string
 	var limit, searchOffset int
 	var jsonOutput bool
@@ -25,7 +25,6 @@ func NewSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 				return err
 			}
 			resp, err := adapter.Search(cmd.Context(), store.SearchRequest{
-				Repo:   repo,
 				Query:  args[0],
 				Path:   searchPath,
 				Limit:  limit,

@@ -8,7 +8,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewTreeCommand(adapter store.Adapter, repo string) *cobra.Command {
+func NewTreeCommand(adapter store.Adapter) *cobra.Command {
 	var depth int
 	var treeAll, treeDirsOnly, treeFullPath, treeShowSize, treeSortByTime, treeDirsFirst bool
 	cmd := &cobra.Command{
@@ -21,7 +21,6 @@ func NewTreeCommand(adapter store.Adapter, repo string) *cobra.Command {
 				sortField = "mtime"
 			}
 			resp, err := adapter.Tree(cmd.Context(), store.TreeRequest{
-				Repo:      repo,
 				Path:      argPath(args, "/"),
 				Depth:     depth,
 				All:       treeAll,

@@ -9,7 +9,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewStatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
+func NewStatCommand(adapter store.Adapter) *cobra.Command {
 	var customFormat string
 	var terse bool
 
@@ -18,17 +18,7 @@ func NewStatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comma
 		Short: "Print VFS node metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Resolve effective adapter/repo/path for repo:// refs.
-			effAdapter := adapter
-			effRepo := repo
-			effPath := args[0]
-			if targetRepo, targetPath, ok := parseRepoRef(repo, args[0]); ok {
-				effAdapter = rawAdapter
-				effRepo = targetRepo
-				effPath = targetPath
-			}
-
-			resp, err := effAdapter.Stat(cmd.Context(), store.StatRequest{Repo: effRepo, Path: effPath})
+			resp, err := adapter.Stat(cmd.Context(), store.StatRequest{Path: args[0]})
 			if err != nil {
 				return err
 			}

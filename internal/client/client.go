@@ -15,127 +15,14 @@ import (
 )
 
 type Client struct {
-	baseURL    string
-	http       *http.Client
-	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
-	mountPath  string // sent as X-Mount-Path header for observability
-	logID      string // sent as X-Rolio-Log-Id header for audit correlation
-	sourceKind store.SourceKind
-	sourceName string
+	baseURL string
+	http    *http.Client
 }
 
 var _ store.Adapter = (*Client)(nil)
-var _ store.MountSourceLister = (*Client)(nil)
-var _ store.SourceRouter = (*Client)(nil)
-var _ store.UsageRecorder = (*Client)(nil)
 
 func New(baseURL string) *Client {
-	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    http.DefaultClient,
-	}
-}
-
-// SetClientRepo sets the client repo name sent as X-Client-Repo header.
-func (c *Client) SetClientRepo(repo string) {
-	c.clientRepo = repo
-}
-
-// ClientRepo returns the configured client repo name.
-func (c *Client) ClientRepo() string {
-	return c.clientRepo
-}
-
-// SetMountPath sets the mount path sent as X-Mount-Path header.
-func (c *Client) SetMountPath(mp string) {
-	c.mountPath = mp
-}
-
-// SetLogID sets the audit log ID sent as X-Rolio-Log-Id header.
-func (c *Client) SetLogID(id string) {
-	c.logID = id
-}
-
-// RepoList returns the list of repository names available on the server.
-func (c *Client) RepoList(ctx context.Context) ([]string, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/repos"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build repo_list request: %w", err)
-	}
-	var resp struct {
-		Repos []struct {
-			Name string `json:"name"`
-		} `json:"repos"`
-	}
-	if err := c.do(req, "repo_list", &resp); err != nil {
-		return nil, err
-	}
-	names := make([]string, len(resp.Repos))
-	for i, r := range resp.Repos {
-		names[i] = r.Name
-	}
-	return names, nil
-}
-
-// RegisterRepo creates a repository on the server.
-func (c *Client) RegisterRepo(ctx context.Context, name string) error {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/repos"
-	body, err := json.Marshal(map[string]string{"name": name})
-	if err != nil {
-		return fmt.Errorf("marshal register_repo request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build register_repo request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, "register_repo", nil)
-}
-
-func (c *Client) RecordUsageEvent(ctx context.Context, event store.UsageEvent) (*store.UsageEventResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/usage-events"
-	body, err := json.Marshal(event)
-	if err != nil {
-		return nil, fmt.Errorf("marshal usage event request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build usage event request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	var resp store.UsageEventResponse
-	if err := c.do(req, "usage_event", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (c *Client) MountSources(ctx context.Context) ([]store.MountSource, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/mount-sources"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build mount_sources request: %w", err)
-	}
-	var resp struct {
-		Sources []store.MountSource `json:"sources"`
-	}
-	if err := c.do(req, "mount_sources", &resp); err != nil {
-		return nil, err
-	}
-	return resp.Sources, nil
-}
-
-func (c *Client) AdapterForSource(_ context.Context, source store.SourceRef) (store.Adapter, error) {
-	switch source.Kind {
-	case store.SourceKindRepo, store.SourceKindDocs, store.SourceKindDocset:
-		cp := *c
-		cp.sourceKind = source.Kind
-		cp.sourceName = source.Name
-		return &cp, nil
-	default:
-		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
-	}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: http.DefaultClient}
 }
 
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -159,7 +46,7 @@ func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse
 	if req.Offset > 0 {
 		q.Set("offset", strconv.Itoa(req.Offset))
 	}
-	if err := c.get(ctx, req.Repo, "ls", q, &resp); err != nil {
+	if err := c.get(ctx, "ls", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -189,7 +76,7 @@ func (c *Client) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeRe
 	if req.DirsFirst {
 		q.Set("dirs_first", "true")
 	}
-	if err := c.get(ctx, req.Repo, "tree", q, &resp); err != nil {
+	if err := c.get(ctx, "tree", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -197,7 +84,7 @@ func (c *Client) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeRe
 
 func (c *Client) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
 	q := url.Values{"path": {req.Path}}
-	endpoint, err := c.url(req.Repo, "cat", q)
+	endpoint, err := c.url("cat", q)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +151,7 @@ func (c *Client) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepRe
 	if req.Exclude != "" {
 		q.Set("exclude", req.Exclude)
 	}
-	if err := c.get(ctx, req.Repo, "grep", q, &resp); err != nil {
+	if err := c.get(ctx, "grep", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -297,19 +184,7 @@ func (c *Client) Find(ctx context.Context, req store.FindRequest) (*store.FindRe
 	if req.Offset > 0 {
 		q.Set("offset", strconv.Itoa(req.Offset))
 	}
-	if err := c.get(ctx, req.Repo, "find", q, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (c *Client) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
-	var resp store.HashResponse
-	q := url.Values{}
-	if req.Path != "" {
-		q.Set("path", req.Path)
-	}
-	if err := c.get(ctx, req.Repo, "hashes", q, &resp); err != nil {
+	if err := c.get(ctx, "find", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -318,7 +193,7 @@ func (c *Client) BatchHashes(ctx context.Context, req store.HashRequest) (*store
 func (c *Client) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
 	var resp store.StatResponse
 	q := url.Values{"path": {req.Path}}
-	if err := c.get(ctx, req.Repo, "stat", q, &resp); err != nil {
+	if err := c.get(ctx, "stat", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -330,7 +205,7 @@ func (c *Client) Put(ctx context.Context, req store.PutRequest) (*store.PutRespo
 	if req.ExpectedHash != "" {
 		q.Set("expected_hash", req.ExpectedHash)
 	}
-	if err := c.putWithHeaders(ctx, req.Repo, "write", q, req.Content, &resp, req.ExpectedHash); err != nil {
+	if err := c.putWithHeaders(ctx, "write", q, req.Content, &resp, req.ExpectedHash); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -341,7 +216,7 @@ func (c *Client) Delete(ctx context.Context, req store.DeleteRequest) (*store.De
 	if req.ExpectedHash != "" {
 		q.Set("expected_hash", req.ExpectedHash)
 	}
-	if err := c.deleteWithHeaders(ctx, req.Repo, q, req.ExpectedHash != ""); err != nil {
+	if err := c.deleteWithHeaders(ctx, q); err != nil {
 		return nil, err
 	}
 	return &store.DeleteResponse{}, nil
@@ -354,7 +229,7 @@ func (c *Client) Edit(ctx context.Context, req store.EditRequest) (*store.EditRe
 		q.Set("expected_hash", req.ExpectedHash)
 	}
 	body, _ := json.Marshal(map[string]any{"old": req.Old, "new": req.New, "all": req.All})
-	if err := c.putJSONWithHeaders(ctx, req.Repo, "edit", q, body, &resp, req.ExpectedHash != ""); err != nil {
+	if err := c.putJSONWithHeaders(ctx, "edit", q, body, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -372,19 +247,7 @@ func (c *Client) Search(ctx context.Context, req store.SearchRequest) (*store.Se
 	if req.Offset > 0 {
 		q.Set("offset", strconv.Itoa(req.Offset))
 	}
-	if err := c.get(ctx, req.Repo, "search", q, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (c *Client) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
-	var resp store.LocateResponse
-	q := url.Values{"q": {req.Query}}
-	if req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
-	}
-	if err := c.get(ctx, req.Repo, "locate", q, &resp); err != nil {
+	if err := c.get(ctx, "search", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -399,14 +262,14 @@ func (c *Client) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobRe
 	if req.Offset > 0 {
 		q.Set("offset", strconv.Itoa(req.Offset))
 	}
-	if err := c.get(ctx, req.Repo, "glob", q, &resp); err != nil {
+	if err := c.get(ctx, "glob", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any) error {
-	endpoint, err := c.url(repo, op, q)
+func (c *Client) get(ctx context.Context, op string, q url.Values, out any) error {
+	endpoint, err := c.url(op, q)
 	if err != nil {
 		return err
 	}
@@ -418,13 +281,9 @@ func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any
 	return c.do(req, op, out)
 }
 
-// putWithHeaders is like put but sets CAS and cross-repo headers.
-func (c *Client) putWithHeaders(ctx context.Context, repo, op string, q url.Values, body string, out any, expectedHash string) error {
-	source, err := c.sourceForRepo(repo)
-	if err != nil {
-		return err
-	}
-	endpoint, err := c.urlForSource(source, op, q)
+// putWithHeaders is like put but sets conditional write headers.
+func (c *Client) putWithHeaders(ctx context.Context, op string, q url.Values, body string, out any, expectedHash string) error {
+	endpoint, err := c.url(op, q)
 	if err != nil {
 		return err
 	}
@@ -433,17 +292,13 @@ func (c *Client) putWithHeaders(ctx context.Context, repo, op string, q url.Valu
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	c.setWriteHeaders(req, source, expectedHash)
+	c.setWriteHeaders(req, expectedHash)
 	return c.do(req, op, out)
 }
 
-// putJSONWithHeaders is like putJSON but sets CAS and cross-repo headers.
-func (c *Client) putJSONWithHeaders(ctx context.Context, repo, op string, q url.Values, body []byte, out any, hasExpectedHash bool) error {
-	source, err := c.sourceForRepo(repo)
-	if err != nil {
-		return err
-	}
-	endpoint, err := c.urlForSource(source, op, q)
+// putJSONWithHeaders is like putJSON but sets conditional write headers.
+func (c *Client) putJSONWithHeaders(ctx context.Context, op string, q url.Values, body []byte, out any) error {
+	endpoint, err := c.url(op, q)
 	if err != nil {
 		return err
 	}
@@ -452,17 +307,13 @@ func (c *Client) putJSONWithHeaders(ctx context.Context, repo, op string, q url.
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	c.setWriteHeaders(req, source, q.Get("expected_hash"))
+	c.setWriteHeaders(req, q.Get("expected_hash"))
 	return c.do(req, op, out)
 }
 
-// deleteWithHeaders is like delete but sets CAS and cross-repo headers.
-func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Values, hasExpectedHash bool) error {
-	source, err := c.sourceForRepo(repo)
-	if err != nil {
-		return err
-	}
-	endpoint, err := c.urlForSource(source, "delete", q)
+// deleteWithHeaders is like delete but sets conditional write headers.
+func (c *Client) deleteWithHeaders(ctx context.Context, q url.Values) error {
+	endpoint, err := c.url("delete", q)
 	if err != nil {
 		return err
 	}
@@ -470,18 +321,12 @@ func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Value
 	if err != nil {
 		return fmt.Errorf("build delete request: %w", err)
 	}
-	c.setWriteHeaders(req, source, q.Get("expected_hash"))
+	c.setWriteHeaders(req, q.Get("expected_hash"))
 	return c.do(req, "delete", nil)
 }
 
-// setWriteHeaders adds X-Client-Repo, X-Mount-Path and If-Match/If-None-Match headers.
-func (c *Client) setWriteHeaders(req *http.Request, source store.SourceRef, expectedHash string) {
-	if source.Kind == store.SourceKindRepo && c.clientRepo != "" && c.clientRepo != source.Name {
-		req.Header.Set("X-Client-Repo", c.clientRepo)
-	}
-	if c.mountPath != "" {
-		req.Header.Set("X-Mount-Path", c.mountPath)
-	}
+// setWriteHeaders adds conditional write headers.
+func (c *Client) setWriteHeaders(req *http.Request, expectedHash string) {
 	if expectedHash == "*" {
 		req.Header.Set("If-None-Match", "*")
 	} else if expectedHash != "" {
@@ -497,9 +342,6 @@ func (c *Client) do(req *http.Request, op string, out any) error {
 // beyond the normal 2xx range. For allowed codes, no JSON decode is attempted
 // and the caller handles the response.
 func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []int) error {
-	if c.logID != "" {
-		req.Header.Set("X-Rolio-Log-Id", c.logID)
-	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("call %s: %w", op, err)
@@ -526,12 +368,8 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 			switch errResp.Error.Code {
 			case "NOT_FOUND":
 				return fmt.Errorf("%w: %w", store.ErrNotFound, err)
-			case "UNKNOWN_REPO":
-				return fmt.Errorf("%w: %w", store.ErrUnknownRepo, err)
-			case "REPO_EXISTS":
-				return fmt.Errorf("%w: %w", store.ErrRepoExists, err)
-			case "UNKNOWN_SOURCE":
-				return fmt.Errorf("%w: %w", store.ErrUnknownSource, err)
+			case "CONFLICT":
+				return fmt.Errorf("%w: %w", store.ErrConflict, err)
 			case "NOT_SUPPORTED":
 				return fmt.Errorf("%w: %w", store.ErrNotSupported, err)
 			}
@@ -547,162 +385,13 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 	return nil
 }
 
-func (c *Client) url(repo, op string, q url.Values) (string, error) {
-	source, err := c.sourceForRepo(repo)
-	if err != nil {
-		return "", err
-	}
-	return c.urlForSource(source, op, q)
-}
-
-func (c *Client) sourceForRepo(repo string) (store.SourceRef, error) {
-	if c.sourceKind != "" {
-		switch c.sourceKind {
-		case store.SourceKindRepo, store.SourceKindDocs, store.SourceKindDocset:
-			return store.SourceRef{Kind: c.sourceKind, Name: c.sourceName}, nil
-		default:
-			return store.SourceRef{}, fmt.Errorf("%w: %s", store.ErrUnknownSource, c.sourceKind)
-		}
-	}
-	return store.SourceRef{Kind: store.SourceKindRepo, Name: repo}, nil
-}
-
-func (c *Client) urlForSource(source store.SourceRef, op string, q url.Values) (string, error) {
+func (c *Client) url(op string, q url.Values) (string, error) {
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("parse base url: %w", err)
 	}
-	if q == nil {
-		q = url.Values{}
-	}
-	decodedPrefix := strings.TrimRight(base.Path, "/")
-	escapedPrefix := strings.TrimRight(base.EscapedPath(), "/")
-
-	var decodedPath string
-	var escapedPath string
-	switch source.Kind {
-	case store.SourceKindRepo:
-		decodedPath = decodedPrefix + "/v1/repos/" + op
-		escapedPath = escapedPrefix + "/v1/repos/" + url.PathEscape(op)
-		q.Set("repo", source.Name)
-	case store.SourceKindDocs:
-		decodedPath = decodedPrefix + "/v1/docs/" + op
-		escapedPath = escapedPrefix + "/v1/docs/" + url.PathEscape(op)
-		q.Set("name", source.Name)
-	case store.SourceKindDocset:
-		decodedPath = decodedPrefix + "/v1/docset/" + op
-		escapedPath = escapedPrefix + "/v1/docset/" + url.PathEscape(op)
-		q.Set("name", source.Name)
-	default:
-		return "", fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
-	}
-	base.Path = decodedPath
-	base.RawPath = escapedPath
+	base.Path = strings.TrimRight(base.Path, "/") + "/v1/" + op
+	base.RawPath = ""
 	base.RawQuery = q.Encode()
 	return base.String(), nil
-}
-
-// === Docset Methods ===
-
-// CreateDocset creates a new docset.
-func (c *Client) CreateDocset(ctx context.Context, req store.CreateDocsetRequest) (*store.CreateDocsetResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets"
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal create docset request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build create docset request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	var resp store.CreateDocsetResponse
-	if err := c.do(httpReq, "create_docset", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// ListDocsets lists all docsets.
-func (c *Client) ListDocsets(ctx context.Context) (*store.ListDocsetsResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build list docsets request: %w", err)
-	}
-	var resp store.ListDocsetsResponse
-	if err := c.do(req, "list_docsets", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// GetDocset gets a docset by name.
-func (c *Client) GetDocset(ctx context.Context, name string) (*store.GetDocsetResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build get docset request: %w", err)
-	}
-	var resp store.GetDocsetResponse
-	if err := c.do(req, "get_docset", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// DeleteDocset deletes a docset by name.
-func (c *Client) DeleteDocset(ctx context.Context, name string) error {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("build delete docset request: %w", err)
-	}
-	return c.do(req, "delete_docset", nil)
-}
-
-// AddDocsetMember adds a document to a docset.
-func (c *Client) AddDocsetMember(ctx context.Context, req store.AddDocsetMemberRequest) (*store.AddDocsetMemberResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(req.Name) + "/members"
-	body, err := json.Marshal(map[string]string{
-		"source_ref": req.SourceRef,
-		"path":       req.Path,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal add docset member request: %w", err)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build add docset member request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	var resp store.AddDocsetMemberResponse
-	if err := c.do(httpReq, "add_docset_member", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// RemoveDocsetMember removes a document from a docset.
-func (c *Client) RemoveDocsetMember(ctx context.Context, name, path string) error {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name) + "/members?path=" + url.QueryEscape(path)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("build remove docset member request: %w", err)
-	}
-	return c.do(req, "remove_docset_member", nil)
-}
-
-// GetDocsetMemberContent reads a document's content via docset membership.
-func (c *Client) GetDocsetMemberContent(ctx context.Context, name, path string) (*store.GetDocsetMemberContentResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name) + "/docs?path=" + url.QueryEscape(path)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build get docset member content request: %w", err)
-	}
-	var resp store.GetDocsetMemberContentResponse
-	if err := c.do(req, "get_docset_member_content", &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
 }

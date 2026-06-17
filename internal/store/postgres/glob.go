@@ -15,7 +15,7 @@ import (
 //   - ?   = match any single character except /
 //   - All other characters are escaped literally.
 //
-// Paths in rolio_repo_paths are stored with leading / (e.g. "/docs/readme.md").
+// Paths in rolio_paths are stored with leading / (e.g. "/docs/readme.md").
 // Callers add a /? anchor prefix so the regex handles the leading / correctly.
 func globToRegex(pattern string) (string, error) {
 	if pattern == "" {

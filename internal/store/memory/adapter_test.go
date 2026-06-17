@@ -26,7 +26,7 @@ func newAdapter(t *testing.T) *Adapter {
 func TestAdapterDelegatesLS(t *testing.T) {
 	adapter := newAdapter(t)
 
-	resp, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "/docs"})
+	resp, err := adapter.LS(context.Background(), store.LSRequest{Path: "/docs"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -38,7 +38,7 @@ func TestAdapterDelegatesLS(t *testing.T) {
 func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 	adapter := newAdapter(t)
 
-	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "/docs/readme.md"})
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Path: "/docs/readme.md"})
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
@@ -46,7 +46,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Cat() = %+v, want readme content", cat)
 	}
 
-	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "rolio", Path: "/", Pattern: "Adapter"})
+	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Path: "/", Pattern: "Adapter"})
 	if err != nil {
 		t.Fatalf("Grep() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Grep() = %+v, want Adapter match in main.go", grep.Matches)
 	}
 
-	find, err := adapter.Find(context.Background(), store.FindRequest{Repo: "rolio", Path: "/", Name: "*.go"})
+	find, err := adapter.Find(context.Background(), store.FindRequest{Path: "/", Name: "*.go"})
 	if err != nil {
 		t.Fatalf("Find() error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Find() = %+v, want main.go", find.Nodes)
 	}
 
-	tree, err := adapter.Tree(context.Background(), store.TreeRequest{Repo: "rolio", Path: "/", Depth: 1})
+	tree, err := adapter.Tree(context.Background(), store.TreeRequest{Path: "/", Depth: 1})
 	if err != nil {
 		t.Fatalf("Tree() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Tree() = %+v, want root tree depth 1", tree)
 	}
 
-	stat, err := adapter.Stat(context.Background(), store.StatRequest{Repo: "rolio", Path: "/docs"})
+	stat, err := adapter.Stat(context.Background(), store.StatRequest{Path: "/docs"})
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestAdapterLSLimitOffset(t *testing.T) {
 	adapter := New(tree)
 
 	// No limit/offset - returns all
-	resp, err := adapter.LS(context.Background(), store.LSRequest{Repo: "test", Path: "/docs"})
+	resp, err := adapter.LS(context.Background(), store.LSRequest{Path: "/docs"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -105,7 +105,7 @@ func TestAdapterLSLimitOffset(t *testing.T) {
 	}
 
 	// Limit 2
-	resp, err = adapter.LS(context.Background(), store.LSRequest{Repo: "test", Path: "/docs", Limit: 2})
+	resp, err = adapter.LS(context.Background(), store.LSRequest{Path: "/docs", Limit: 2})
 	if err != nil {
 		t.Fatalf("LS(limit=2) error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestAdapterLSLimitOffset(t *testing.T) {
 	}
 
 	// Offset 3
-	resp, err = adapter.LS(context.Background(), store.LSRequest{Repo: "test", Path: "/docs", Offset: 3})
+	resp, err = adapter.LS(context.Background(), store.LSRequest{Path: "/docs", Offset: 3})
 	if err != nil {
 		t.Fatalf("LS(offset=3) error = %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAdapterLSLimitOffset(t *testing.T) {
 	}
 
 	// Limit 2, Offset 1
-	resp, err = adapter.LS(context.Background(), store.LSRequest{Repo: "test", Path: "/docs", Limit: 2, Offset: 1})
+	resp, err = adapter.LS(context.Background(), store.LSRequest{Path: "/docs", Limit: 2, Offset: 1})
 	if err != nil {
 		t.Fatalf("LS(limit=2,offset=1) error = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestAdapterLSLimitOffset(t *testing.T) {
 	}
 
 	// Offset beyond range
-	resp, err = adapter.LS(context.Background(), store.LSRequest{Repo: "test", Path: "/docs", Offset: 100})
+	resp, err = adapter.LS(context.Background(), store.LSRequest{Path: "/docs", Offset: 100})
 	if err != nil {
 		t.Fatalf("LS(offset=100) error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestAdapterFindLimitOffset(t *testing.T) {
 	adapter := New(tree)
 
 	// Find all .go files
-	resp, err := adapter.Find(context.Background(), store.FindRequest{Repo: "test", Path: "/src", Name: "*.go"})
+	resp, err := adapter.Find(context.Background(), store.FindRequest{Path: "/src", Name: "*.go"})
 	if err != nil {
 		t.Fatalf("Find() error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestAdapterFindLimitOffset(t *testing.T) {
 	}
 
 	// Find with limit
-	resp, err = adapter.Find(context.Background(), store.FindRequest{Repo: "test", Path: "/src", Name: "*.go", Limit: 2})
+	resp, err = adapter.Find(context.Background(), store.FindRequest{Path: "/src", Name: "*.go", Limit: 2})
 	if err != nil {
 		t.Fatalf("Find(limit=2) error = %v", err)
 	}
@@ -190,7 +190,7 @@ func TestAdapterFindLimitOffset(t *testing.T) {
 	}
 
 	// Find with offset
-	resp, err = adapter.Find(context.Background(), store.FindRequest{Repo: "test", Path: "/src", Name: "*.go", Offset: 2})
+	resp, err = adapter.Find(context.Background(), store.FindRequest{Path: "/src", Name: "*.go", Offset: 2})
 	if err != nil {
 		t.Fatalf("Find(offset=2) error = %v", err)
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewFindCommand(adapter store.Adapter, repo string) *cobra.Command {
+func NewFindCommand(adapter store.Adapter) *cobra.Command {
 	var name, findType, iname string
 	var maxDepth, minDepth, findLimit, findOffset int
 	var allFiles bool
@@ -34,7 +34,6 @@ func NewFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("invalid type %q: use f or d", findType)
 			}
 			resp, err := adapter.Find(cmd.Context(), store.FindRequest{
-				Repo:     repo,
 				Path:     argPath(args, "/"),
 				Name:     name,
 				Type:     findType,

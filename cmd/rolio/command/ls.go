@@ -8,7 +8,7 @@ import (
 	"github.com/austiecodes/rolio/internal/store"
 )
 
-func NewLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
+func NewLSCommand(adapter store.Adapter) *cobra.Command {
 	var longFmt, classify, slashDir bool
 	var sortByTime, sortBySize, reverse bool
 	var recursive, allFiles, dirOnly bool
@@ -24,16 +24,6 @@ func NewLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			}
 			p := argPath(args, "/")
 
-			// Resolve effective adapter, repo, and path. For repo:// refs,
-			// use rawAdapter directly; otherwise use the normal mount adapter.
-			effAdapter := adapter
-			effRepo := repo
-			if targetRepo, targetPath, ok := parseRepoRef(repo, p); ok {
-				effAdapter = rawAdapter
-				effRepo = targetRepo
-				p = targetPath
-			}
-
 			sortField := "name"
 			sortReverse := false
 			if sortByTime {
@@ -48,7 +38,7 @@ func NewLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			}
 
 			if dirOnly {
-				resp, err := effAdapter.Stat(cmd.Context(), store.StatRequest{Repo: effRepo, Path: p})
+				resp, err := adapter.Stat(cmd.Context(), store.StatRequest{Path: p})
 				if err != nil {
 					return err
 				}
@@ -56,8 +46,7 @@ func NewLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 				return nil
 			}
 
-			resp, err := effAdapter.LS(cmd.Context(), store.LSRequest{
-				Repo:      effRepo,
+			resp, err := adapter.LS(cmd.Context(), store.LSRequest{
 				Path:      p,
 				Sort:      sortField,
 				Reverse:   sortReverse,
