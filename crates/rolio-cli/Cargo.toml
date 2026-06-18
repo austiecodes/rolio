@@ -1,0 +1,25 @@
+[package]
+name = "rolio-cli"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "rolio"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+reqwest.workspace = true
+rolio-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

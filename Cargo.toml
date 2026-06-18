@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rolio-core", "crates/rolio-server"]
+members = ["crates/rolio-cli", "crates/rolio-core", "crates/rolio-server"]
 resolver = "3"
 
 [workspace.package]
@@ -9,8 +9,10 @@ edition = "2024"
 [workspace.dependencies]
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+clap = { version = "4.6", features = ["derive"] }
 base64 = "0.22"
 llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["metal"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 rolio-core = { path = "crates/rolio-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,6 +21,7 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["serde"] }
+toml = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

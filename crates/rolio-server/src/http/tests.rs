@@ -195,7 +195,10 @@ async fn memory_lifecycle_over_http() {
     assert_eq!(record["data"]["scope"], "global");
     assert_eq!(record["data"]["kind"], "note");
     assert!(
-        record["data"]["created_at"].as_str().unwrap().starts_with("20"),
+        record["data"]["created_at"]
+            .as_str()
+            .unwrap()
+            .starts_with("20"),
         "timestamps serialize as RFC 3339 text"
     );
 
