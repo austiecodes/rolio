@@ -1,0 +1,8 @@
+.git
+.worktrees
+target
+.native
+docs
+AGENTS.md
+CLAUDE.md
+.env

@@ -50,8 +50,12 @@ def install(artifact):
 
 
 def main():
-    if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
-        raise SystemExit("Local embedding acceptance currently targets macOS ARM64 only")
+    if (platform.system(), platform.machine()) not in {
+        ("Darwin", "arm64"),
+        ("Linux", "x86_64"),
+        ("Linux", "aarch64"),
+    }:
+        raise SystemExit("Unsupported platform; the pinned artifact targets macOS ARM64 and Linux")
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     DESTINATION.mkdir(parents=True, exist_ok=True)
     for artifact in manifest["files"]:

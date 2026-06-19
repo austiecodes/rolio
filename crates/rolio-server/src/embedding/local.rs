@@ -2,6 +2,8 @@
 //!
 //! The GGUF carries the pooling mode (last token) for this model family; the
 //! adapter still normalizes explicitly and validates shape and norm itself.
+//! llama.cpp provides CPU inference everywhere and Metal on Apple silicon;
+//! the artifact set is platform independent.
 
 use std::{num::NonZeroU32, path::Path, time::Duration};
 
@@ -25,9 +27,6 @@ impl LocalEmbedding {
     /// blocking startup task. No download, provider fallback, or GPU discovery.
     /// The supplied directory must contain the complete pinned artifact set.
     pub fn open(directory: &Path) -> Result<Self, EmbeddingError> {
-        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            return Err(EmbeddingError::Unavailable);
-        }
         let manifest = artifacts::verify(directory)?;
         let model_path = directory.join(MODEL_FILE);
         let profile = EmbeddingProfile {

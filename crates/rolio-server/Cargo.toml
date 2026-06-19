@@ -32,6 +32,9 @@ sha2 = { workspace = true, optional = true }
 name = "rolio-server"
 path = "src/main.rs"
 
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+llama-cpp-2 = { workspace = true, optional = true, features = ["metal"] }
+
 [dev-dependencies]
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }

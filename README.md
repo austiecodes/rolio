@@ -1,66 +1,154 @@
 # Rolio
 
-Explicit long-term memory for people and coding agents. Rolio keeps memories
-you can independently read, correct, and delete; nothing is captured
-automatically and no session is uploaded.
-
-A memory has a scope (`global` or `project:<key>`), a controlled kind
-(note / preference / convention / fact / solution / lesson / plan), a
-confidence, an optional source, and content in Markdown. Writes are
-conditional: creation only when the ID is absent, update and delete only with
-the expected revision. There is no unconditional overwrite.
-
-## Shape
+Explicit long-term memory for people and coding agents. A memory is a scoped
+note you can read, correct, and delete; nothing is captured automatically.
+Writes are conditional (`If-None-Match: *` to create, `If-Match: <revision>`
+to change), so nothing is overwritten silently.
 
 ```
 rolio CLI ──HTTP v1──> rolio-server ──> PostgreSQL (pgvector)
                             └──> local Qwen3-Embedding-0.6B (Q8_0, llama.cpp)
 ```
 
-- `rolio-core` — memory value types and validation; no I/O.
-- `rolio-server` — storage contract, PostgreSQL adapter, local embedding,
-  memory operations, and the HTTP service.
-- `rolio-cli` — the single client surface; agents integrate through it.
-- `plugins/` — Claude Code and Codex integrations: a skill documenting the CLI
-  plus an opt-in session hook. No MCP server.
+## Install
 
-Clients never open the database and never submit vectors; the server generates
-and validates embeddings with one pinned local model. Replacing the model or
-the vector dimension is an explicit export-and-rebuild operation.
-
-## Build and run
-
-Requires Rust 1.96, PostgreSQL 13+ with the pgvector extension, and the pinned
-model artifact on macOS ARM64.
+One command builds and installs the CLI, fetches the pinned embedding model
+(~610 MB), and starts PostgreSQL plus rolio-server with docker compose:
 
 ```bash
-python3 scripts/setup-embedding.py          # installs the pinned GGUF (~610 MB)
+git clone <this-repository> && cd rolio
+./scripts/install.sh
+```
 
+Prerequisites: [Rust](https://rustup.rs) (rust-toolchain.toml pins 1.96.0),
+Docker with compose v2, and python3. The installer is idempotent — re-run it
+after pulling changes.
+
+It prints the server URL and a generated bearer token; keep them in your
+environment:
+
+```bash
+export ROLO_URL=http://127.0.0.1:8080
+export ROLO_TOKEN=<token from .env>
+```
+
+The stack keeps data in the `pgdata` volume and the model in
+`.native/embedding/`. PostgreSQL is not published to the host; only the
+server listens on `127.0.0.1:8080`. Logs: `docker compose logs -f
+rolio-server`; stop: `docker compose down`; wipe the database: `docker
+compose down -v`.
+
+### Manual steps
+
+Install only the CLI from source:
+
+```bash
+cargo install --path crates/rolio-cli --locked    # binary: ~/.cargo/bin/rolio
+```
+
+Fetch the pinned model (the server refuses any other artifact):
+
+```bash
+python3 scripts/setup-embedding.py
+```
+
+Run the server with compose (reads `ROLIO_TOKEN` from `.env`):
+
+```bash
+docker compose up -d --build
+```
+
+Run the server outside Docker instead (PostgreSQL 13+ with pgvector):
+
+```bash
 export ROLO_ADDR=127.0.0.1:8080
-export ROLO_TOKEN=<bearer token>
-export ROLO_DATABASE_URL=postgres://...     # pgvector-enabled database
+export ROLO_TOKEN=<token>
+export ROLO_DATABASE_URL=postgres://...
+export ROLO_ARTIFACTS=.native/embedding/qwen3-embedding-0.6b   # default
 cargo run --all-features -p rolio-server
 ```
 
-The CLI picks its URL and token from `--url` / `--token`, then `ROLO_URL` /
-`ROLO_TOKEN`, then `~/.config/rolio/config.toml`.
+## CLI
+
+Content always arrives on stdin. `--json` prints one machine-readable
+envelope on stdout; diagnostics go to stderr. URL and token resolve from
+`--url` / `--token`, then `ROLO_URL` / `ROLO_TOKEN`, then
+`~/.config/rolio/config.toml` (`url`, `token`, `timeout_secs`).
 
 ```bash
-echo "Prefer revision conditions over blind writes." | \
-  rolio remember --scope project:rolio --kind convention
-rolio recall "write discipline" --scope project:rolio --limit 5
-rolio list --scope project:rolio
+echo "Use uv for all Python dependency management." | \
+  rolio remember --scope project:demo --kind convention --confidence 0.9
+
+rolio recall "how do we manage dependencies?" --scope project:demo --limit 5
+
+rolio get <memory-id>
+rolio list --scope project:demo
+
+echo "Use uv; never mix pip and uv in one project." | \
+  rolio update <memory-id> --revision <revision> --kind convention
+
+rolio forget <memory-id> --revision <revision>
 ```
 
-## Verify
+Kinds: `note preference convention fact solution lesson plan`. Scopes:
+`global` (personal, cross-project) or `project:<key>`. Confidence is 0.0–1.0
+in tenths and only breaks equal-score ties.
+
+Exit codes: `0` success · `2` usage · `3` invalid input · `4` conflict (read
+again, then retry) · `5` connection or timeout · `6` unauthorized · `7` write
+outcome unknown (read the memory back before writing again).
+
+## Plugins
+
+Both plugins are thin: a skill that documents the CLI and an optional
+SessionStart hook that recalls project memories. The hook stays off unless
+`ROLIO_AUTO_RECALL=1` and `ROLIO_SCOPE` are set. Nothing else is configured;
+there is no MCP server.
+
+### Claude Code
+
+Try it in one session:
+
+```bash
+claude --plugin-dir ./plugins/claude-code
+```
+
+Install it persistently from the local marketplace in this repository
+(`claude plugin validate ./plugins/claude-code` checks the layout):
+
+```
+/plugin marketplace add ./plugins
+/plugin install rolio@rolio
+```
+
+Then start a new session; the skill is available as `/rolio:rolio`.
+
+### Codex
+
+Add the local marketplace and install the plugin from it:
+
+```bash
+codex plugin marketplace add ./plugins
+codex plugin add rolio@rolio
+```
+
+Start a new Codex session, review the bundled hook when Codex asks you to
+trust it, and the skill is available. To use the skill without the plugin
+bundle, copy `plugins/codex/skills/rolio/` into your Codex skills directory.
+
+## Development
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
-# Optional, against a real PostgreSQL:
+# Against a real PostgreSQL (pgvector):
 ROLIO_TEST_DATABASE_URL=postgres://... cargo test -p rolio-server --all-features --locked
+# Against the pinned model (ignored by default):
+cargo test -p rolio-server --all-features --locked real_model_ -- --ignored --test-threads=1
 ```
 
-The PostgreSQL and real-model tests skip with a notice when their environment
-is absent.
+Crates: `rolio-core` (value types), `rolio-server` (storage contract,
+PostgreSQL adapter, local embedding, HTTP), `rolio-cli` (the client).
+Vectors travel through the pgvector text protocol handled inside the
+adapter; the server never trusts client-supplied vectors.

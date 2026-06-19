@@ -1,0 +1,12 @@
+{
+  "name": "rolio",
+  "description": "Rolio agent integrations built on the rolio CLI",
+  "owner": { "name": "austiecodes" },
+  "plugins": [
+    {
+      "name": "rolio",
+      "source": "./claude-code",
+      "description": "Explicit long-term memory for Claude Code through the rolio CLI"
+    }
+  ]
+}

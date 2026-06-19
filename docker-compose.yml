@@ -1,0 +1,40 @@
+# Storage (PostgreSQL + pgvector) and backend (rolio-server) in one stack.
+# The model artifacts stay on the host and are mounted read-only; PostgreSQL is
+# not published to the host — only the server is.
+
+name: rolio
+
+services:
+  postgres:
+    # Official postgres:17-alpine with the pinned pgvector extension built in.
+    build:
+      context: .
+      dockerfile: docker/postgres.Dockerfile
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: rolio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rolio"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rolio-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ROLO_TOKEN: ${ROLIO_TOKEN:?set ROLIO_TOKEN in .env}
+      ROLO_DATABASE_URL: postgres://postgres@postgres:5432/rolio
+    volumes:
+      - ./.native/embedding/qwen3-embedding-0.6b:/artifacts:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  pgdata:

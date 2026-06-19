@@ -1,0 +1,12 @@
+{
+  "name": "rolio",
+  "plugins": [
+    {
+      "name": "rolio",
+      "source": {
+        "source": "local",
+        "path": "./codex"
+      }
+    }
+  ]
+}
