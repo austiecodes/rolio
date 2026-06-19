@@ -49,3 +49,4 @@ go.work.sum
 /rolio-server.toml
 .native
 target
+/reference-repo/
