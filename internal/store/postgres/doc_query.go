@@ -59,10 +59,10 @@ func DocSearchCountSQL(cfg Config) (string, error) {
 	}
 	return fmt.Sprintf(
 		"select count(*) from %s rp join %s d on rp.doc_id = d.id, "+
-			"plainto_tsquery('english', $1) as query "+
-			"where d.content_search @@ query "+
+			"plainto_tsquery('%s', $1) as query "+
+			"where d.search_vector @@ query "+
 			"and ($2 = '' or rp.path = $2 or starts_with(rp.path, $2 || '/'))",
-		pathsTable, docsTable,
+		pathsTable, docsTable, searchConfig(cfg.Language),
 	), nil
 }
 
@@ -78,15 +78,15 @@ func DocSearchDataSQL(cfg Config) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"select rp.path, ts_rank_cd(d.content_search, query, 32) as rank, "+
-			"ts_headline('english', d.content, query, 'StartSel=**,StopSel=**,MaxWords=50,MinWords=10') as snippet, "+
+		"select rp.path, ts_rank_cd(d.search_vector, query, 32) as rank, "+
+			"left(d.content, 240) as snippet, "+
 			"rp.size, rp.mtime "+
 			"from %s rp join %s d on rp.doc_id = d.id, "+
-			"plainto_tsquery('english', $1) as query "+
-			"where d.content_search @@ query "+
+			"plainto_tsquery('%s', $1) as query "+
+			"where d.search_vector @@ query "+
 			"and ($2 = '' or rp.path = $2 or starts_with(rp.path, $2 || '/')) "+
 			"order by rank desc, rp.path limit $3 offset $4",
-		pathsTable, docsTable,
+		pathsTable, docsTable, searchConfig(cfg.Language),
 	), nil
 }
 
@@ -111,7 +111,7 @@ func DocStreamGrepSQL(cfg Config) (string, error) {
 // --- Write SQL builders ---
 
 // DocInsertSQL inserts a new doc row with content and hash, returning the doc ID.
-// content_search is GENERATED and auto-updated.
+// Derived metadata and search vectors are updated in the same transaction.
 func DocInsertSQL(cfg Config) (string, error) {
 	docsTable, err := quoteTable(cfg.Schema, "rolio_documents")
 	if err != nil {
@@ -125,7 +125,7 @@ func DocInsertSQL(cfg Config) (string, error) {
 
 // DocUpdateByPathSQL updates the doc linked to a specific bound path.
 // Used when Put overwrites an existing file — updates in-place to avoid orphans.
-// content_search is GENERATED and auto-updated.
+// Derived metadata and search vectors are updated in the same transaction.
 func DocUpdateByPathSQL(cfg Config) (string, error) {
 	pathsTable, err := quoteTable(cfg.Schema, "rolio_paths")
 	if err != nil {

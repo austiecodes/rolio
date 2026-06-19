@@ -372,6 +372,8 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 				return fmt.Errorf("%w: %w", store.ErrConflict, err)
 			case "NOT_SUPPORTED":
 				return fmt.Errorf("%w: %w", store.ErrNotSupported, err)
+			case "CONTENT_NOT_READY":
+				return fmt.Errorf("%w: %w", store.ErrContentNotReady, err)
 			}
 			return err
 		}

@@ -11,13 +11,42 @@ import (
 	"strings"
 
 	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/webui"
 )
 
-func NewHandler(adapter store.Adapter) http.Handler { return &handler{adapter: adapter} }
+func NewHandler(adapter store.Adapter) http.Handler {
+	return &handler{adapter: adapter, ui: webui.Handler()}
+}
 
-type handler struct{ adapter store.Adapter }
+type handler struct {
+	adapter store.Adapter
+	ui      http.Handler
+}
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || u.Host != r.Host {
+				writeJSONErrorCode(w, 403, "FORBIDDEN", "cross-origin mutations are not allowed")
+				return
+			}
+		}
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeJSONErrorCode(w, 403, "FORBIDDEN", "cross-site mutations are not allowed")
+			return
+		}
+	}
+	if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+		h.ui.ServeHTTP(w, r)
+		return
+	}
+	if r.URL.Path == "/v1/summary" || r.URL.Path == "/v1/settings" || r.URL.Path == "/v1/refresh" || r.URL.Path == "/v1/reindex" {
+		h.serveContext(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	if r.URL.Path == "/healthz" {
 		fmt.Fprintln(w, "ok")
 		return
@@ -68,6 +97,40 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+func (h *handler) serveContext(w http.ResponseWriter, r *http.Request) {
+	method := http.MethodGet
+	if r.URL.Path == "/v1/refresh" || r.URL.Path == "/v1/reindex" {
+		method = http.MethodPost
+	}
+	if r.Method != method {
+		w.Header().Set("Allow", method)
+		writeJSONErrorCode(w, 405, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+	adapter, ok := h.adapter.(store.ContextStore)
+	if !ok {
+		writeJSONError(w, store.ErrNotSupported)
+		return
+	}
+	var value any
+	var err error
+	switch r.URL.Path {
+	case "/v1/summary":
+		value, err = adapter.Summary(r.Context(), queryPath(r.URL.Query()))
+	case "/v1/settings":
+		value, err = adapter.Settings(r.Context())
+	case "/v1/refresh":
+		value, err = adapter.Refresh(r.Context(), queryPath(r.URL.Query()))
+	case "/v1/reindex":
+		value, err = adapter.Reindex(r.Context())
+	}
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	writeJSON(w, value)
 }
 
 func (h *handler) dispatchRead(r *http.Request, adapter store.Adapter, op string) (any, error) {

@@ -49,14 +49,34 @@ func SchemaSQL(cfg Config) ([]string, error) {
  content text not null,
  content_hash text not null,
  revision bigint not null default 1,
- updated_at timestamptz not null default now(),
- content_search tsvector generated always as (to_tsvector('english',content)) stored
+ updated_at timestamptz not null default now()
  )`, docs), fmt.Sprintf(`create table if not exists %s (
  path text primary key,
  doc_id uuid not null unique references %s(id),
  size bigint not null,
  mtime timestamptz not null default now(),
  check (left(path,1)='/' and path <> '/')
- )`, paths, docs), fmt.Sprintf("create index if not exists rolio_documents_search on %s using gin(content_search)", docs))
+ )`, paths, docs))
+
+	summaries, err := quoteTable(cfg.Schema, "rolio_summaries")
+	if err != nil {
+		return nil, err
+	}
+	statements = append(statements,
+		fmt.Sprintf("alter table %s add column if not exists metadata jsonb not null default '{}'", docs),
+		fmt.Sprintf("alter table %s add column if not exists search_vector tsvector", docs),
+		fmt.Sprintf("alter table %s add column if not exists search_language text not null default ''", docs),
+		fmt.Sprintf("create index if not exists rolio_documents_context_search on %s using gin(search_vector)", docs),
+		fmt.Sprintf(`create table if not exists %s (
+   path text primary key,
+   language text not null,
+   source_hash text not null default '',
+   abstract text not null default '',
+   overview text not null default '',
+   status text not null,
+   error text not null default '',
+   token text not null default '',
+   updated_at timestamptz not null default now()
+  )`, summaries))
 	return statements, nil
 }

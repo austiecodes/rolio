@@ -1,0 +1,16 @@
+# Required: zh (Chinese) or en (English). Changing it requires rolio reindex
+# and refreshing existing directory summaries.
+language = "zh"
+addr = "127.0.0.1:4837"
+
+[backend.postgres]
+dsn = "${ROLIO_POSTGRES_DSN}"
+schema = "rolio"
+
+# Optional: enable explicit L0/L1 generation with an OpenAI-compatible provider.
+# This must be the complete chat completions endpoint. No model is selected
+# automatically. Ordinary document operations work without this section.
+# [summary]
+# url = "https://your-provider.example/v1/chat/completions"
+# model = "your-model"
+# api_key = "${ROLIO_SUMMARY_API_KEY}"

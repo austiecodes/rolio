@@ -26,7 +26,7 @@ type Node struct {
 	Kind    string            `json:"kind"`
 	Size    int64             `json:"size,omitempty"`
 	ModTime string            `json:"mod_time,omitempty"`
-	Hash    string            `json:"hash,omitempty"` // Deferred: not populated by Stat yet; see Phase 3E
+	Hash    string            `json:"hash,omitempty"`
 	Meta    map[string]string `json:"meta,omitempty"`
 }
 
@@ -75,9 +75,12 @@ type CatRequest struct {
 }
 
 type CatResponse struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-	Hash    string `json:"hash,omitempty"`
+	Path          string         `json:"path"`
+	Content       string         `json:"content"`
+	Hash          string         `json:"hash,omitempty"`
+	Body          string         `json:"body"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	MetadataError string         `json:"metadata_error,omitempty"`
 }
 
 type GrepRequest struct {

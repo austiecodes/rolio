@@ -40,3 +40,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Go and web build outputs
+/bin/
+/rolio
+/rolio-server
+/web/node_modules/
+/rolio-server.toml
+.native
+target

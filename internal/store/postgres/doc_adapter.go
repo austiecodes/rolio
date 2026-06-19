@@ -12,13 +12,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/austiecodes/rolio/internal/document"
 	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/summary"
 	"github.com/austiecodes/rolio/internal/vfs"
 )
 
 type Config struct {
-	DSN    string
-	Schema string
+	DSN       string
+	Schema    string
+	Language  string
+	Generator summary.Generator
 }
 type DocAdapter struct {
 	pool *pgxpool.Pool
@@ -31,6 +35,9 @@ func NewDocAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
 	return &DocAdapter{pool: pool, cfg: cfg}
 }
 func Connect(ctx context.Context, cfg Config) (*DocAdapter, error) {
+	if cfg.Language != "zh" && cfg.Language != "en" {
+		return nil, fmt.Errorf("language must be zh or en")
+	}
 	pool, err := pgxpool.New(ctx, cfg.DSN)
 	if err != nil {
 		return nil, err
@@ -128,6 +135,9 @@ func (d *DocAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResp
 
 func (d *DocAdapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
 	req.Path = cleanDocPath(req.Path)
+	if name := path.Base(req.Path); name == ".abstract.md" || name == ".overview.md" {
+		return d.sidecar(ctx, req.Path)
+	}
 
 	query, err := DocCatSQL(d.cfg)
 	if err != nil {
@@ -142,7 +152,13 @@ func (d *DocAdapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatR
 		return nil, fmt.Errorf("doc cat %s: %w", req.Path, err)
 	}
 
-	return &store.CatResponse{Path: req.Path, Content: content, Hash: hash}, nil
+	doc, err := parseDocument(req.Path, content)
+	if err != nil {
+		// Legacy documents predate metadata validation. Always make their raw
+		// source available so they can be exported or repaired through the UI.
+		return &store.CatResponse{Path: req.Path, Content: content, Hash: hash, Body: content, MetadataError: err.Error()}, nil
+	}
+	return &store.CatResponse{Path: req.Path, Content: content, Hash: hash, Body: doc.Body, Metadata: doc.Metadata}, nil
 }
 
 func (d *DocAdapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
@@ -207,6 +223,17 @@ func (d *DocAdapter) Search(ctx context.Context, req store.SearchRequest) (*stor
 	}
 	if req.Offset < 0 || req.Limit < 0 {
 		return nil, store.ErrInvalidParam
+	}
+	status, err := d.indexStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if status.Stale > 0 {
+		return nil, fmt.Errorf("%w: search index language changed or index is missing; run rolio reindex", store.ErrConflict)
+	}
+	req.Query = document.Tokens(req.Query)
+	if req.Query == "" {
+		return nil, store.ErrEmptyQuery
 	}
 
 	pathFilter := cleanDocPath(req.Path)

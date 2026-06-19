@@ -20,7 +20,7 @@ func TestMinimalConfiguration(t *testing.T) {
 		t.Fatalf("CLI: %+v %v", cfg, err)
 	}
 	t.Setenv("ROLIO_TEST_CONFIG_DSN", "postgres://example/test")
-	srv, err := LoadServer(configFile(t, "[backend.postgres]\ndsn='${ROLIO_TEST_CONFIG_DSN}'"))
+	srv, err := LoadServer(configFile(t, "language='en'\n[backend.postgres]\ndsn='${ROLIO_TEST_CONFIG_DSN}'"))
 	if err != nil || srv.Backend.Postgres.DSN != "postgres://example/test" || srv.Backend.Type != "postgres" {
 		t.Fatalf("server: %+v %v", srv, err)
 	}
@@ -36,5 +36,25 @@ func TestRemovedConfigurationIsRejected(t *testing.T) {
 	}
 	if _, err := LoadServer(configFile(t, "[backend.postgres]\nschema='public'")); err == nil {
 		t.Fatal("accepted missing DSN")
+	}
+}
+
+func TestLanguageAndSummaryConfiguration(t *testing.T) {
+	for _, language := range []string{"", "auto", "ZH", "fr"} {
+		if _, err := LoadServer(configFile(t, "language='"+language+"'\n[backend.postgres]\ndsn='postgres://test'")); err == nil {
+			t.Errorf("accepted language %q", language)
+		}
+	}
+	for _, language := range []string{"zh", "en"} {
+		cfg, err := LoadServer(configFile(t, "language='"+language+"'\n[backend.postgres]\ndsn='postgres://test'"))
+		if err != nil || cfg.Language != language {
+			t.Fatal(cfg, err)
+		}
+	}
+	for _, url := range []string{"", "file:///tmp/model", "http://user:secret@example.com/v1/chat/completions"} {
+		_, err := LoadServer(configFile(t, "language='zh'\n[backend.postgres]\ndsn='postgres://test'\n[summary]\nmodel='test'\nurl='"+url+"'"))
+		if err == nil {
+			t.Errorf("accepted URL %s", url)
+		}
 	}
 }

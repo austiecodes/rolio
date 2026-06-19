@@ -15,6 +15,7 @@ import (
 	"github.com/austiecodes/rolio/internal/config"
 	"github.com/austiecodes/rolio/internal/server"
 	"github.com/austiecodes/rolio/internal/store/postgres"
+	"github.com/austiecodes/rolio/internal/summary"
 )
 
 func main() {
@@ -34,7 +35,11 @@ func newRootCommand() *cobra.Command {
 		}
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		adapter, err := postgres.Connect(ctx, postgres.Config{DSN: cfg.Backend.Postgres.DSN, Schema: cfg.Backend.Postgres.Schema})
+		var generator summary.Generator
+		if cfg.Summary.URL != "" {
+			generator = &summary.ChatGenerator{URL: cfg.Summary.URL, Model: cfg.Summary.Model, APIKey: cfg.Summary.APIKey}
+		}
+		adapter, err := postgres.Connect(ctx, postgres.Config{DSN: cfg.Backend.Postgres.DSN, Schema: cfg.Backend.Postgres.Schema, Language: cfg.Language, Generator: generator})
 		if err != nil {
 			return err
 		}

@@ -59,6 +59,14 @@ func validPath(p string) (string, error) {
 	}
 	return cleanDocPath(p), nil
 }
+func writablePath(p string) error {
+	for _, part := range strings.Split(p, "/") {
+		if part == ".abstract.md" || part == ".overview.md" {
+			return fmt.Errorf("%w: summary sidecars are server-managed; use refresh", store.ErrInvalidParam)
+		}
+	}
+	return nil
+}
 func (d *DocAdapter) checkFilePath(ctx context.Context, tx pgx.Tx, p string) error {
 	table, err := quoteTable(d.cfg.Schema, "rolio_paths")
 	if err != nil {
@@ -89,6 +97,9 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 	}
 	if p == "/" {
 		return nil, store.ErrIsDir
+	}
+	if err := writablePath(p); err != nil {
+		return nil, err
 	}
 	tx, err := d.beginWrite(ctx)
 	if err != nil {
@@ -131,6 +142,14 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 	if _, err := tx.Exec(ctx, query, p, id, int64(len(req.Content))); err != nil {
 		return nil, err
 	}
+	if err := d.indexDocument(ctx, tx, id, p, req.Content); err != nil {
+		return nil, err
+	}
+	if oldHash != hash {
+		if err := d.invalidate(ctx, tx, p, false); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -143,6 +162,9 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 	}
 	if p == "/" {
 		return nil, store.ErrCannotDeleteRoot
+	}
+	if err := writablePath(p); err != nil {
+		return nil, err
 	}
 	tx, err := d.beginWrite(ctx)
 	if err != nil {
@@ -177,6 +199,9 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 	if tag.RowsAffected() == 0 {
 		return nil, store.ErrNotFound
 	}
+	if err := d.invalidate(ctx, tx, p, true); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -189,6 +214,9 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 	}
 	if p == "/" {
 		return nil, store.ErrIsDir
+	}
+	if err := writablePath(p); err != nil {
+		return nil, err
 	}
 	if req.Old == "" {
 		return nil, store.ErrEmptyOld
@@ -216,6 +244,14 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 		count = 1
 	}
 	content = strings.Replace(content, req.Old, req.New, count)
+	if err := d.indexDocument(ctx, tx, id, p, content); err != nil {
+		return nil, err
+	}
+	if hash != store.HashContent(content) {
+		if err := d.invalidate(ctx, tx, p, false); err != nil {
+			return nil, err
+		}
+	}
 	query, err := DocUpdateByIDSQL(d.cfg)
 	if err != nil {
 		return nil, err

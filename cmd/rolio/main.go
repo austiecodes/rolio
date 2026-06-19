@@ -41,6 +41,7 @@ func newRootCommand(adapter store.Adapter) *cobra.Command {
 		command.NewSearchCommand(adapter),
 		command.NewGlobCommand(adapter),
 	)
+	cmd.AddCommand(command.NewContextCommands(adapter)...)
 	return cmd
 }
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

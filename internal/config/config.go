@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -15,8 +16,15 @@ type ServerRef struct {
 	Addr string `toml:"addr"`
 }
 type ServerConfig struct {
-	Addr    string        `toml:"addr"`
-	Backend BackendConfig `toml:"backend"`
+	Language string        `toml:"language"`
+	Summary  SummaryConfig `toml:"summary"`
+	Addr     string        `toml:"addr"`
+	Backend  BackendConfig `toml:"backend"`
+}
+type SummaryConfig struct {
+	URL    string `toml:"url"`
+	Model  string `toml:"model"`
+	APIKey string `toml:"api_key"`
 }
 type BackendConfig struct {
 	Type     string         `toml:"type"`
@@ -51,6 +59,15 @@ func LoadServer(path string) (ServerConfig, error) {
 	var cfg ServerConfig
 	if err := load(path, &cfg); err != nil {
 		return cfg, err
+	}
+	if cfg.Language != "zh" && cfg.Language != "en" {
+		return cfg, fmt.Errorf("language is required and must be zh or en; example: language = \"zh\"")
+	}
+	if cfg.Summary.URL != "" || cfg.Summary.Model != "" || cfg.Summary.APIKey != "" {
+		u, err := url.Parse(cfg.Summary.URL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || cfg.Summary.Model == "" {
+			return cfg, fmt.Errorf("summary.url must be an http(s) chat completions endpoint and summary.model is required")
+		}
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = "127.0.0.1:4837"

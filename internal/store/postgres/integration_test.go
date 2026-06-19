@@ -27,7 +27,7 @@ func TestSingleTreeHTTP(t *testing.T) {
 	}
 	ctx := context.Background()
 	schema := fmt.Sprintf("rolio_test_%d", time.Now().UnixNano())
-	adapter, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema})
+	adapter, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestSingleTreeHTTP(t *testing.T) {
 		}
 	})
 	t.Run("restart persistence", func(t *testing.T) {
-		reopened, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema})
+		reopened, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "en"})
 		if err != nil {
 			t.Fatal(err)
 		}
