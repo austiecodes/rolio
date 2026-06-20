@@ -1,6 +1,6 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rolio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Explicit long-term memory for Codex through the rolio CLI"
 }
