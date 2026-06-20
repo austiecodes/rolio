@@ -94,9 +94,10 @@ Kinds: `note preference convention fact solution lesson plan`. Scopes:
 `global` (personal, cross-project) or `project:<key>`. Confidence is 0.0–1.0
 in tenths and only breaks equal-score ties.
 
-Exit codes: `0` success · `2` usage · `3` invalid input · `4` conflict (read
-again, then retry) · `5` connection or timeout · `6` unauthorized · `7` write
-outcome unknown (read the memory back before writing again).
+Exit codes: `0` success · `2` usage · `3` invalid input · `4` conflict (the
+error carries the current record; merge and retry) · `5` connection or
+timeout · `6` unauthorized · `7` write outcome unknown (read the memory back
+before writing again).
 
 ## Plugins
 
@@ -138,6 +139,8 @@ Start a new Codex session, review the bundled hook when Codex asks you to
 trust it, and the skills are available. To use the skills without the plugin
 bundle, copy `plugins/codex/skills/memory-recall/` and
 `plugins/codex/skills/memory-remember/` into your Codex skills directory.
+The workflow roadmap for the agent experience lives in
+`docs/memory-workflow-roadmap.md`.
 
 ## Development
 

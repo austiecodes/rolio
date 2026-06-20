@@ -70,6 +70,13 @@ fn code(body: &[u8]) -> String {
         .to_string()
 }
 
+async fn json_body(response: axum::response::Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
 #[tokio::test]
 async fn healthz_needs_no_token() {
     let response = app()
@@ -158,8 +165,11 @@ async fn memory_lifecycle_over_http() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let duplicate = json_body(response).await;
+    assert_eq!(duplicate["error"]["code"], "already_exists");
+    assert_eq!(duplicate["error"]["current"]["revision"], etag);
 
-    // Wrong revision cannot update.
+    // Wrong revision cannot update; the conflict carries the current record.
     let other = Revision::new().to_string();
     let response = app
         .clone()
@@ -173,6 +183,10 @@ async fn memory_lifecycle_over_http() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let conflict = json_body(response).await;
+    assert_eq!(conflict["error"]["code"], "revision_conflict");
+    assert_eq!(conflict["error"]["current"]["revision"], etag);
+    assert_eq!(conflict["error"]["current"]["content"], "First");
 
     // Read carries the revision as ETag.
     let response = app
@@ -247,6 +261,9 @@ async fn memory_lifecycle_over_http() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let stale_delete = json_body(response).await;
+    assert_eq!(stale_delete["error"]["current"]["revision"], new_etag);
+
     let response = app
         .clone()
         .oneshot(request(
@@ -259,6 +276,24 @@ async fn memory_lifecycle_over_http() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    // A delete on a vanished record conflicts without a current record.
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/v1/memories/{id}"),
+            Some(TOKEN),
+            &[("if-match", &new_etag)],
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let vanished = json_body(response).await;
+    assert_eq!(vanished["error"]["code"], "revision_conflict");
+    assert!(vanished["error"]["current"].is_null());
+
     let response = app
         .oneshot(request(
             "GET",

@@ -34,10 +34,26 @@ impl Output {
                     .as_str()
                     .unwrap_or("The request failed.");
                 eprintln!("error [{code}]: {message}");
+                eprint!("{}", current_record(envelope));
                 std::process::exit(exit);
             }
         }
     }
+}
+
+/// A conflict envelope carries the current record; show it so a merge needs
+/// no separate read.
+fn current_record(envelope: &Value) -> String {
+    let current = &envelope["error"]["current"];
+    if !current.is_object() {
+        return String::new();
+    }
+    format!(
+        "current {} revision {}\n  {}\n",
+        current["id"].as_str().unwrap_or("?"),
+        current["revision"].as_str().unwrap_or("?"),
+        first_line(current["content"].as_str().unwrap_or(""))
+    )
 }
 
 fn human(envelope: &Value) -> String {
@@ -173,5 +189,30 @@ mod tests {
             ]}
         });
         assert!(human(&envelope).lines().nth(1).unwrap().len() <= 90);
+    }
+
+    #[test]
+    fn conflict_envelope_shows_the_current_record() {
+        let envelope = serde_json::json!({
+            "version": 1,
+            "error": {
+                "code": "revision_conflict",
+                "message": "The memory changed. Read it again before you write it.",
+                "current": {
+                    "id": "a",
+                    "revision": "r2",
+                    "content": "Newer content\nsecond line"
+                }
+            }
+        });
+        let text = current_record(&envelope);
+        assert!(text.contains("current a revision r2"));
+        assert!(text.contains("Newer content"));
+        assert!(!text.contains("second line"));
+
+        let plain = serde_json::json!({
+            "error": { "code": "not_found", "message": "The memory does not exist." }
+        });
+        assert_eq!(current_record(&plain), "");
     }
 }

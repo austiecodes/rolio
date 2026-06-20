@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 
 use crate::{
     embedding::EmbeddingError,
-    memory::{MemoryInput, MemoryService},
+    memory::{MemoryError, MemoryInput, MemoryService},
     store::{ListCursor, ListRequest, Revision, StoreError, StoredMemory},
 };
 
@@ -179,7 +179,7 @@ async fn put_memory(
                 StatusCode::OK
             },
         ),
-        Err(error) => ApiError::from_memory(error).into_response(),
+        Err(error) => write_error_response(&state, id, error).await,
     }
 }
 
@@ -220,7 +220,7 @@ async fn delete_memory(
     };
     match state.service.forget(id, revision).await {
         Ok(()) => data(serde_json::json!({ "deleted": id.to_string() })),
-        Err(error) => ApiError::from_memory(error).into_response(),
+        Err(error) => write_error_response(&state, id, error).await,
     }
 }
 
@@ -399,6 +399,9 @@ struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    /// The current record attached to a write conflict, when it is readable.
+    /// Boxed to keep `Result<_, ApiError>` small; conflicts are the rare path.
+    current: Option<Box<MemoryJson>>,
 }
 
 impl ApiError {
@@ -407,6 +410,7 @@ impl ApiError {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_input",
             message: message.into(),
+            current: None,
         }
     }
 
@@ -415,6 +419,7 @@ impl ApiError {
             status: StatusCode::UNAUTHORIZED,
             code: "unauthorized",
             message: String::from("A valid bearer token is required."),
+            current: None,
         }
     }
 
@@ -423,6 +428,7 @@ impl ApiError {
             status: StatusCode::PRECONDITION_REQUIRED,
             code: "precondition_required",
             message: message.into(),
+            current: None,
         }
     }
 
@@ -431,6 +437,7 @@ impl ApiError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "unavailable",
             message: message.into(),
+            current: None,
         }
     }
 
@@ -444,6 +451,7 @@ impl ApiError {
                 status: StatusCode::NOT_FOUND,
                 code: "not_found",
                 message: String::from("The memory does not exist."),
+                current: None,
             },
             MemoryError::Embedding(embedding) => Self::from_embedding(embedding),
             MemoryError::Store(store) => Self::from_store(store),
@@ -468,6 +476,7 @@ impl ApiError {
             status,
             code,
             message: error.to_string(),
+            current: None,
         }
     }
 
@@ -523,18 +532,43 @@ impl ApiError {
             status,
             code,
             message,
+            current: None,
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let mut error = serde_json::json!({ "code": self.code, "message": self.message });
+        if let Some(current) = self.current {
+            // MemoryJson holds plain fields only; serialization cannot fail.
+            error["current"] = serde_json::to_value(current).expect("memory json serializes");
+        }
         let body = serde_json::json!({
             "version": PROTOCOL_VERSION,
-            "error": { "code": self.code, "message": self.message },
+            "error": error,
         });
         (self.status, axum::Json(body)).into_response()
     }
+}
+
+/// Write conflicts carry the current record so a client can merge without a
+/// separate read. The extra read is best effort: a vanished or unreadable
+/// record still yields the plain conflict.
+async fn write_error_response(state: &Arc<AppState>, id: MemoryId, error: MemoryError) -> Response {
+    let carries_current = matches!(
+        &error,
+        MemoryError::Store(StoreError::RevisionConflict | StoreError::AlreadyExists)
+    );
+    let mut api_error = ApiError::from_memory(error);
+    if carries_current {
+        // The service maps a vanished record to NotFound; that yields the
+        // plain conflict without a current record.
+        if let Ok(record) = state.service.get(id).await {
+            api_error.current = Some(Box::new(MemoryJson::from(&record)));
+        }
+    }
+    api_error.into_response()
 }
 
 // ---------------------------------------------------------------------------
