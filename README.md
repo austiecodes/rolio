@@ -100,7 +100,8 @@ outcome unknown (read the memory back before writing again).
 
 ## Plugins
 
-Both plugins are thin: a skill that documents the CLI and an optional
+Both plugins are thin: two skills that document the CLI by direction
+(`memory-recall` for reads, `memory-remember` for writes) and an optional
 SessionStart hook that recalls project memories. The hook stays off unless
 `ROLIO_AUTO_RECALL=1` and `ROLIO_SCOPE` are set. Nothing else is configured;
 there is no MCP server.
@@ -121,7 +122,8 @@ Install it persistently from the local marketplace in this repository
 /plugin install rolio@rolio
 ```
 
-Then start a new session; the skill is available as `/rolio:rolio`.
+Then start a new session; the skills are available as `/rolio:memory-recall`
+and `/rolio:memory-remember`.
 
 ### Codex
 
@@ -133,8 +135,9 @@ codex plugin add rolio@rolio
 ```
 
 Start a new Codex session, review the bundled hook when Codex asks you to
-trust it, and the skill is available. To use the skill without the plugin
-bundle, copy `plugins/codex/skills/rolio/` into your Codex skills directory.
+trust it, and the skills are available. To use the skills without the plugin
+bundle, copy `plugins/codex/skills/memory-recall/` and
+`plugins/codex/skills/memory-remember/` into your Codex skills directory.
 
 ## Development
 
