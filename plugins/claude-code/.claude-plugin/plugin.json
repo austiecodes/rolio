@@ -1,6 +1,6 @@
 {
   "name": "rolio",
   "description": "Explicit long-term memory for Claude Code through the rolio CLI",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": { "name": "austiecodes" }
 }

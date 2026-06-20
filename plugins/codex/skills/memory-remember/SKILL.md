@@ -57,7 +57,9 @@ file, with the memory holding the pointer and the reason.
 1. Never write to `global` from a project task unless the user asks for it.
 2. Update a memory when it is wrong or incomplete; forget it when it is
    obsolete. Never delete silently when a correction would help future sessions.
-3. Exit `4` conflict: the memory changed. `get` it again, merge, retry.
+3. Exit `4` conflict: the memory changed. The error prints the current record
+   (`current <id> revision <rev>`); merge your change into it and retry with
+   that revision - no separate read is needed.
 4. Exit `5` or `7` on a write has an unknown outcome: `get` the memory back
    before you write again. Do not retry blindly.
 5. Exit codes: `0` success · `2` usage · `3` invalid input · `4` conflict ·
