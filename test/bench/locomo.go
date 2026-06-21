@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,23 +21,29 @@ type locomoSample struct {
 	QA           []struct {
 		Question string          `json:"question"`
 		Answer   json.RawMessage `json:"answer"`
+		Evidence []string        `json:"evidence"`
 		Category int             `json:"category"`
 	} `json:"qa"`
+}
+
+type locomoTurn struct {
+	Speaker string `json:"speaker"`
+	ID      string `json:"dia_id"`
+	Text    string `json:"text"`
+	Caption string `json:"blip_caption"`
 }
 
 type locomoSession struct {
 	Number int
 	Date   string
-	Turns  []struct {
-		Speaker string `json:"speaker"`
-		ID      string `json:"dia_id"`
-		Text    string `json:"text"`
-		Caption string `json:"blip_caption"`
-	}
+	Turns  []locomoTurn
 }
 
 var (
 	locomoSessionKey = regexp.MustCompile(`^session_(\d+)$`)
+	// An evidence entry is the ID of a turn, D<session>:<turn>. Some entries
+	// contain more than one ID, and one has the form D:<session>:<turn>.
+	locomoTurnID     = regexp.MustCompile(`D:?(\d+):(\d+)`)
 	locomoCategories = map[int]string{1: "1-multi-hop", 2: "2-temporal", 3: "3-open-domain", 4: "4-single-hop"}
 )
 
@@ -59,6 +66,36 @@ func jsonText(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
+}
+
+func locomoDocument(sample string, session int) string {
+	return fmt.Sprintf("/conversations/%s/session-%02d.md", sample, session)
+}
+
+// locomoEvidence returns the evidence for the entries of one question. An
+// entry that refers to a turn that is not in the conversation is ignored.
+func locomoEvidence(sample string, sessions []locomoSession, entries []string) evidence {
+	var e evidence
+	for _, entry := range entries {
+		for _, m := range locomoTurnID.FindAllStringSubmatch(entry, -1) {
+			n, _ := strconv.Atoi(m[1])
+			id := fmt.Sprintf("D%d:%s", n, m[2])
+			exists := slices.ContainsFunc(sessions, func(s locomoSession) bool {
+				return s.Number == n && slices.ContainsFunc(s.Turns, func(t locomoTurn) bool { return t.ID == id })
+			})
+			// Each line of a document starts with the speaker and the turn ID.
+			text := "(" + id + ")"
+			if !exists || slices.ContainsFunc(e.Turns, func(t []string) bool { return t[0] == text }) {
+				continue
+			}
+			e.Turns = append(e.Turns, []string{text})
+			if doc := locomoDocument(sample, n); !slices.Contains(e.Docs, doc) {
+				e.Docs = append(e.Docs, doc)
+			}
+		}
+	}
+	slices.Sort(e.Docs)
+	return e
 }
 
 func (s locomoSample) sessions() ([]locomoSession, error) {
@@ -104,6 +141,7 @@ func (d locomo) questions(path string) ([]question, error) {
 			out = append(out, question{
 				ID: fmt.Sprintf("%s:%d", s.ID, i), Scope: s.ID, Group: locomoCategories[qa.Category],
 				Question: qa.Question, Gold: jsonText(qa.Answer), Date: date,
+				Evidence: locomoEvidence(s.ID, sessions, qa.Evidence),
 			})
 		}
 	}
@@ -135,8 +173,7 @@ func (d locomo) documents(path string, scopes map[string]bool, put func(document
 				}
 				doc.WriteString("\n\n")
 			}
-			name := fmt.Sprintf("/conversations/%s/session-%02d.md", s.ID, session.Number)
-			if err := put(document{Path: name, Content: doc.String()}); err != nil {
+			if err := put(document{Path: locomoDocument(s.ID, session.Number), Content: doc.String()}); err != nil {
 				return err
 			}
 		}

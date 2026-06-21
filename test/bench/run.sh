@@ -102,5 +102,5 @@ echo "== judge"
 "$bench" "$name" judge --out "$out" --parallel "${PARALLEL:-4}" --model "${PI_MODEL:-zai-coding-cn/glm-5.3}"
 
 echo "== result"
-"$bench" "$name" stat --out "$out"
+"$bench" "$name" stat --out "$out" --data "$data"
 echo "result directory: $out"

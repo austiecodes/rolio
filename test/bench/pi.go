@@ -20,6 +20,8 @@ type piResult struct {
 	ToolCalls  int
 	RolioCalls int
 	Seconds    float64
+	// Events is the JSON event stream of pi.
+	Events []byte
 }
 
 var rolioCall = regexp.MustCompile(`(^|[^[:alnum:]_/-])rolio `)
@@ -35,8 +37,23 @@ func runPi(dir, prompt string, timeout time.Duration, options ...string) piResul
 	cmd.Stderr = &stderr
 	started := time.Now()
 	out, err := cmd.Output()
-	result := piResult{Seconds: time.Since(started).Seconds()}
-	stop, modelError := "", ""
+	result := piResult{Seconds: time.Since(started).Seconds(), Events: out}
+	stop, modelError := result.read(out)
+	switch {
+	case ctx.Err() != nil:
+		result.Error = "timeout"
+	case err != nil:
+		result.Error = strings.TrimSpace(fmt.Sprintf("%v %s", err, stderr.String()))
+	case stop != "stop":
+		// pi exits 0 when the model provider fails.
+		result.Error = strings.TrimSpace("model did not finish: " + stop + " " + modelError)
+	}
+	return result
+}
+
+// read reads the JSON event stream of pi. It returns the stop reason and the
+// error message of the last assistant message.
+func (r *piResult) read(out []byte) (stop, modelError string) {
 	for line := range bytes.SplitSeq(out, []byte("\n")) {
 		var event struct {
 			Type    string `json:"type"`
@@ -68,28 +85,19 @@ func runPi(dir, prompt string, timeout time.Duration, options ...string) piResul
 			case "text":
 				parts = append(parts, b.Text)
 			case "toolCall":
-				result.ToolCalls++
+				r.ToolCalls++
 				if b.Name == "bash" && rolioCall.MatchString(b.Arguments.Command) {
-					result.RolioCalls++
+					r.RolioCalls++
 				}
 			}
 		}
-		result.Text = strings.TrimSpace(strings.Join(parts, "\n"))
+		r.Text = strings.TrimSpace(strings.Join(parts, "\n"))
 		stop, modelError = event.Message.StopReason, event.Message.ErrorMessage
-		result.Input += event.Message.Usage.Input
-		result.Output += event.Message.Usage.Output
-		result.CacheRead += event.Message.Usage.CacheRead
+		r.Input += event.Message.Usage.Input
+		r.Output += event.Message.Usage.Output
+		r.CacheRead += event.Message.Usage.CacheRead
 	}
-	switch {
-	case ctx.Err() != nil:
-		result.Error = "timeout"
-	case err != nil:
-		result.Error = strings.TrimSpace(fmt.Sprintf("%v %s", err, stderr.String()))
-	case stop != "stop":
-		// pi exits 0 when the model provider fails.
-		result.Error = strings.TrimSpace("model did not finish: " + stop + " " + modelError)
-	}
-	return result
+	return stop, modelError
 }
 
 func piOptions(model, thinking string) []string {

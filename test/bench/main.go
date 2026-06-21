@@ -31,6 +31,7 @@ type question struct {
 	Question string
 	Gold     string
 	Date     string
+	Evidence evidence
 }
 
 type document struct {
@@ -167,6 +168,10 @@ func ingest(d dataset, args []string) error {
 
 // --- qa ---
 
+func tracePath(out, id string) string {
+	return filepath.Join(out, "traces", strings.ReplaceAll(id, ":", "-")+".jsonl")
+}
+
 func answer(d dataset, args []string) error {
 	flags := flag.NewFlagSet("qa", flag.ExitOnError)
 	selected := selectionFlags(flags)
@@ -198,6 +203,9 @@ func answer(d dataset, args []string) error {
 		}
 	}
 	fmt.Printf("%d questions, %d to run\n", len(questions), len(todo))
+	if err := os.MkdirAll(filepath.Join(*out, "traces"), 0o755); err != nil {
+		return err
+	}
 	return each(path, todo, *parallel, func(q question) record {
 		history := "/conversations/" + q.Scope
 		prompt := "The history of earlier conversations is in rolio under " + history + ". Use rolio to find the information that you need."
@@ -210,6 +218,11 @@ func answer(d dataset, args []string) error {
 		}
 		prompt += "Answer the question directly: " + q.Question
 		result := runPi(*workspace, prompt, *timeout, piOptions(*model, *thinking)...)
+		// The trace is not necessary for the answer. Do not lose a good
+		// answer when it cannot be written.
+		if err := os.WriteFile(tracePath(*out, q.ID), compactTrace(result.Events), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: trace:", err)
+		}
 		return record{
 			ID: q.ID, Scope: q.Scope, Group: q.Group, Question: q.Question, Gold: q.Gold,
 			Response: result.Text, Input: result.Input, Output: result.Output, CacheRead: result.CacheRead,
@@ -296,10 +309,83 @@ func judge(d dataset, args []string) error {
 
 // --- stat ---
 
-func stat(_ dataset, args []string) error {
+type tally struct{ correct, total int }
+
+func percent(t tally) string {
+	if t.total == 0 {
+		return "     - (0/0)"
+	}
+	return fmt.Sprintf("%6.2f%% (%d/%d)", 100*float64(t.correct)/float64(t.total), t.correct, t.total)
+}
+
+// retrievalTotals adds the retrieval of the questions that have a trace.
+type retrievalTotals struct {
+	questions, withEvidence, withEmpty int
+	seen, allSeen, listed              tally
+	accuracySeen, accuracyNotSeen      tally
+	searches, empty, repeated          int
+}
+
+func (t *retrievalTotals) add(r retrieval, e evidence, correct bool) {
+	t.questions++
+	t.searches, t.empty, t.repeated = t.searches+r.Searches, t.empty+r.Empty, t.repeated+r.Repeated
+	if r.Empty > 0 {
+		t.withEmpty++
+	}
+	if len(e.Turns) == 0 {
+		return
+	}
+	t.withEvidence++
+	t.seen.correct, t.seen.total = t.seen.correct+r.Seen, t.seen.total+len(e.Turns)
+	t.listed.correct, t.listed.total = t.listed.correct+r.Listed, t.listed.total+len(e.Docs)
+	accuracy := &t.accuracyNotSeen
+	t.allSeen.total++
+	if r.Seen == len(e.Turns) {
+		t.allSeen.correct++
+		accuracy = &t.accuracySeen
+	}
+	accuracy.total++
+	if correct {
+		accuracy.correct++
+	}
+}
+
+func (t retrievalTotals) report(w *strings.Builder) {
+	if t.withEvidence > 0 {
+		fmt.Fprintf(w, "\nEvidence, for the %d questions that have evidence and a trace:\n", t.withEvidence)
+		fmt.Fprintf(w, "  turns seen            %s of the evidence turns\n", percent(t.seen))
+		fmt.Fprintf(w, "  all turns seen        %s of the questions\n", percent(t.allSeen))
+		fmt.Fprintf(w, "  accuracy              %s with all evidence turns seen\n", percent(t.accuracySeen))
+		fmt.Fprintf(w, "                        %s with some evidence turns not seen\n", percent(t.accuracyNotSeen))
+		if t.searches > 0 {
+			fmt.Fprintf(w, "  listed by a search    %s of the evidence documents\n", percent(t.listed))
+		}
+	}
+	if t.searches > 0 {
+		fmt.Fprintf(w, "\nResults of rolio search, for the %d questions that have a trace:\n", t.questions)
+		fmt.Fprintf(w, "  results               %.1f for each question\n", float64(t.searches)/float64(t.questions))
+		fmt.Fprintf(w, "  without a document    %s of the results\n", percent(tally{t.empty, t.searches}))
+		fmt.Fprintf(w, "  after such a result   %s of the results\n", percent(tally{t.repeated, t.searches}))
+		fmt.Fprintf(w, "  questions with one    %s of the questions\n", percent(tally{t.withEmpty, t.questions}))
+	}
+}
+
+func stat(d dataset, args []string) error {
 	flags := flag.NewFlagSet("stat", flag.ExitOnError)
 	out := flags.String("out", "", "result directory")
+	data := flags.String("data", "", "path of the dataset file; necessary for the evidence statistics")
 	flags.Parse(args)
+	evidences := map[string]evidence{}
+	if *data != "" {
+		questions, err := d.questions(*data)
+		if err != nil {
+			return err
+		}
+		for _, q := range questions {
+			evidences[q.ID] = q.Evidence
+		}
+	}
+	known := *data == ""
 	records, err := readRecords(filepath.Join(*out, "judged.jsonl"))
 	if err != nil {
 		return err
@@ -308,11 +394,11 @@ func stat(_ dataset, args []string) error {
 	if err != nil {
 		return err
 	}
-	type tally struct{ correct, total int }
 	var all tally
 	groups := map[string]*tally{}
 	var input, output, cacheRead, toolCalls, rolioCalls, failed int
 	var seconds float64
+	var found retrievalTotals
 	for _, r := range answers {
 		if r.Error != "" {
 			failed++
@@ -337,12 +423,17 @@ func stat(_ dataset, args []string) error {
 		input, output, cacheRead = input+r.Input, output+r.Output, cacheRead+r.CacheRead
 		toolCalls, rolioCalls = toolCalls+r.ToolCalls, rolioCalls+r.RolioCalls
 		seconds += r.Seconds
+		_, ok := evidences[r.ID]
+		known = known || ok
+		if trace, err := os.ReadFile(tracePath(*out, r.ID)); err == nil {
+			found.add(measure(traceResults(trace), evidences[r.ID]), evidences[r.ID], *r.Correct)
+		}
 	}
 	if all.total == 0 {
 		return errors.New("no graded answers")
 	}
-	percent := func(t tally) string {
-		return fmt.Sprintf("%6.2f%% (%d/%d)", 100*float64(t.correct)/float64(t.total), t.correct, t.total)
+	if !known {
+		return errors.New("--data has none of the graded questions: it is not the dataset of this run")
 	}
 	names := make([]string, 0, len(groups))
 	for name := range groups {
@@ -360,6 +451,7 @@ func stat(_ dataset, args []string) error {
 	fmt.Fprintf(&report, "  output tokens  %.0f\n", float64(output)/n)
 	fmt.Fprintf(&report, "  seconds        %.1f\n", seconds/n)
 	fmt.Fprintf(&report, "  tool calls     %.1f (%.1f to rolio)\n", float64(toolCalls)/n, float64(rolioCalls)/n)
+	found.report(&report)
 	fmt.Fprintf(&report, "\nNot graded because of errors: %d\n", failed)
 	fmt.Print(report.String())
 	return os.WriteFile(filepath.Join(*out, "summary.txt"), []byte(report.String()), 0o644)
