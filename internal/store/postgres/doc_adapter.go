@@ -7,6 +7,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,10 +24,18 @@ type Config struct {
 	Schema    string
 	Language  string
 	Generator summary.Generator
+	// SummaryDelay is the time between a write and the generation of the
+	// summaries that it made stale.
+	SummaryDelay time.Duration
+	// SummaryRetry is the time before the second attempt of a generation
+	// that failed. Each subsequent attempt waits longer.
+	SummaryRetry time.Duration
 }
 type DocAdapter struct {
 	pool *pgxpool.Pool
 	cfg  Config
+	// summarizing is true while the workers of RunSummaries run.
+	summarizing atomic.Bool
 }
 
 var _ store.Adapter = (*DocAdapter)(nil)

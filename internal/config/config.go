@@ -25,6 +25,9 @@ type SummaryConfig struct {
 	URL    string `toml:"url"`
 	Model  string `toml:"model"`
 	APIKey string `toml:"api_key"`
+	// Concurrency is the number of summaries that the server generates at
+	// the same time.
+	Concurrency int `toml:"concurrency"`
 }
 type BackendConfig struct {
 	Type     string         `toml:"type"`
@@ -62,6 +65,12 @@ func LoadServer(path string) (ServerConfig, error) {
 	}
 	if cfg.Language != "zh" && cfg.Language != "en" {
 		return cfg, fmt.Errorf("language is required and must be zh or en; example: language = \"zh\"")
+	}
+	if cfg.Summary.Concurrency < 0 || cfg.Summary.Concurrency > 64 {
+		return cfg, fmt.Errorf("summary.concurrency must be between 1 and 64; the default is 4")
+	}
+	if cfg.Summary.Concurrency == 0 {
+		cfg.Summary.Concurrency = 4
 	}
 	if cfg.Summary.URL != "" || cfg.Summary.Model != "" || cfg.Summary.APIKey != "" {
 		u, err := url.Parse(cfg.Summary.URL)

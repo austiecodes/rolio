@@ -57,4 +57,16 @@ func TestLanguageAndSummaryConfiguration(t *testing.T) {
 			t.Errorf("accepted URL %s", url)
 		}
 	}
+	base := "language='zh'\n[backend.postgres]\ndsn='postgres://test'\n[summary]\nmodel='test'\nurl='https://example.com/v1/chat/completions'\n"
+	if cfg, err := LoadServer(configFile(t, base)); err != nil || cfg.Summary.Concurrency != 4 {
+		t.Errorf("default concurrency: %+v, %v", cfg.Summary, err)
+	}
+	if cfg, err := LoadServer(configFile(t, base+"concurrency=8")); err != nil || cfg.Summary.Concurrency != 8 {
+		t.Errorf("concurrency: %+v, %v", cfg.Summary, err)
+	}
+	for _, n := range []string{"-1", "65"} {
+		if _, err := LoadServer(configFile(t, base+"concurrency="+n)); err == nil {
+			t.Errorf("accepted concurrency %s", n)
+		}
+	}
 }

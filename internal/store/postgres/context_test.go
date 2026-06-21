@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,15 +14,8 @@ import (
 	"github.com/austiecodes/rolio/internal/server"
 	"github.com/austiecodes/rolio/internal/store"
 	"github.com/austiecodes/rolio/internal/store/postgres"
-	"github.com/austiecodes/rolio/internal/summary"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-type generateFunc func(context.Context, string, string, []summary.Source) (summary.Result, error)
-
-func (f generateFunc) Generate(ctx context.Context, l, p string, s []summary.Source) (summary.Result, error) {
-	return f(ctx, l, p, s)
-}
 
 func TestContextLifecycle(t *testing.T) {
 	dsn := os.Getenv("ROLIO_TEST_POSTGRES_DSN")
@@ -32,28 +24,7 @@ func TestContextLifecycle(t *testing.T) {
 	}
 	ctx := context.Background()
 	schema := fmt.Sprintf("rolio_context_%d", time.Now().UnixNano())
-	var block, fail atomic.Bool
-	started, release := make(chan struct{}, 1), make(chan struct{})
-	generator := generateFunc(func(ctx context.Context, language, p string, sources []summary.Source) (summary.Result, error) {
-		if block.Load() {
-			started <- struct{}{}
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return summary.Result{}, ctx.Err()
-			}
-		}
-		if fail.Load() {
-			return summary.Result{}, fmt.Errorf("provider unavailable")
-		}
-		for _, s := range sources {
-			if strings.HasPrefix(s.Body, "---") {
-				return summary.Result{}, fmt.Errorf("frontmatter leaked into prompt")
-			}
-		}
-		return summary.Result{Abstract: language + " summary", Overview: "# Overview\n\n[Guide](/docs/guide.md)"}, nil
-	})
-	adapter, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "zh", Generator: generator})
+	adapter, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "zh"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,70 +80,13 @@ func TestContextLifecycle(t *testing.T) {
 	if err != nil || s.Status != "missing" {
 		t.Fatal(s, err)
 	}
-	s, err = cli.Refresh(ctx, "/docs")
-	if err != nil || s.Status != "ready" || s.Language != "zh" || s.SourceHash == "" {
-		t.Fatal(s, err)
-	}
-	firstHash := s.SourceHash
-	sidecar, err := cli.Cat(ctx, store.CatRequest{Path: "/docs/.abstract.md"})
-	if err != nil || sidecar.Body != "zh summary" || !strings.Contains(sidecar.Content, "source_hash:") {
-		t.Fatal(sidecar, err)
-	}
-	_, err = cli.Cat(ctx, store.CatRequest{Path: "/docs/.abstract.md", IfNoneMatch: sidecar.Hash})
-	if !errors.Is(err, store.ErrNotModified) {
-		t.Fatal("sidecar ETag", err)
-	}
-	if _, err = cli.Refresh(ctx, "/"); err != nil {
-		t.Fatal(err)
-	}
-	// An identical write should not invalidate summaries.
-	put(raw)
-	s, err = cli.Summary(ctx, "/docs")
-	if err != nil || s.Status != "ready" {
-		t.Fatal(s, err)
-	}
-	block.Store(true)
-	out := make(chan error, 1)
-	go func() { _, e := cli.Refresh(ctx, "/docs"); out <- e }()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("generation did not start")
-	}
-	s, err = cli.Summary(ctx, "/docs")
-	if err != nil || s.Status != "generating" || s.SourceHash != firstHash {
-		t.Fatal(s, err)
-	}
-	if _, err = cli.Refresh(ctx, "/docs"); !errors.Is(err, store.ErrConflict) {
-		t.Fatal("allowed duplicate generation", err)
+	// The summary queue has its tests in summarize_test.go.
+	if _, err = cli.Refresh(ctx, "/docs"); !errors.Is(err, store.ErrNotSupported) {
+		t.Fatal("refresh without a model", err)
 	}
 	put(raw + "更新内容。\n")
-	close(release)
-	if err = <-out; !errors.Is(err, store.ErrConflict) {
-		t.Fatal("published stale generation", err)
-	}
-	block.Store(false)
-	for _, p := range []string{"/docs", "/"} {
-		s, e := cli.Summary(ctx, p)
-		if e != nil || s.Status != "stale" {
-			t.Fatal(s, e)
-		}
-	}
-	fail.Store(true)
-	if _, err = cli.Refresh(ctx, "/docs"); err == nil {
-		t.Fatal("provider failure ignored")
-	}
-	s, err = cli.Summary(ctx, "/docs")
-	if err != nil || s.Status != "failed" || s.Error == "" || s.SourceHash != firstHash {
-		t.Fatal(s, err)
-	}
-	fail.Store(false)
-	s, err = cli.Refresh(ctx, "/docs")
-	if err != nil || s.Status != "ready" || s.SourceHash == firstHash {
-		t.Fatal(s, err)
-	}
 	// A different configured language must not silently reuse the old index.
-	english, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "en", Generator: generator})
+	english, err := postgres.Connect(ctx, postgres.Config{DSN: dsn, Schema: schema, Language: "en"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,10 +98,6 @@ func TestContextLifecycle(t *testing.T) {
 	if _, err = english.Search(ctx, store.SearchRequest{Query: "authentication"}); !errors.Is(err, store.ErrConflict) {
 		t.Fatal("accepted old index", err)
 	}
-	s, err = english.Summary(ctx, "/docs")
-	if err != nil || s.Status != "stale" || s.Language != "zh" {
-		t.Fatal(s, err)
-	}
 	if _, err = english.Reindex(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -196,10 +106,6 @@ func TestContextLifecycle(t *testing.T) {
 		if e != nil || r.Total != 1 {
 			t.Fatal(q, r, e)
 		}
-	}
-	s, err = english.Refresh(ctx, "/docs")
-	if err != nil || s.Language != "en" || s.Status != "ready" {
-		t.Fatal(s, err)
 	}
 	// Source changes preserve raw content and sidecar freshness across restarts.
 	r, err = english.Cat(ctx, store.CatRequest{Path: "/docs/guide.md"})

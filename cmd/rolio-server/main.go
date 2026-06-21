@@ -18,6 +18,13 @@ import (
 	"github.com/austiecodes/rolio/internal/summary"
 )
 
+// summaryDelay collects the writes of a short period into one summary job.
+// summaryRetry is the time before the second attempt of a failed generation.
+const (
+	summaryDelay = 2 * time.Second
+	summaryRetry = 30 * time.Second
+)
+
 func main() {
 	if err := newRootCommand().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -39,11 +46,23 @@ func newRootCommand() *cobra.Command {
 		if cfg.Summary.URL != "" {
 			generator = &summary.ChatGenerator{URL: cfg.Summary.URL, Model: cfg.Summary.Model, APIKey: cfg.Summary.APIKey}
 		}
-		adapter, err := postgres.Connect(ctx, postgres.Config{DSN: cfg.Backend.Postgres.DSN, Schema: cfg.Backend.Postgres.Schema, Language: cfg.Language, Generator: generator})
+		adapter, err := postgres.Connect(ctx, postgres.Config{DSN: cfg.Backend.Postgres.DSN, Schema: cfg.Backend.Postgres.Schema, Language: cfg.Language, Generator: generator, SummaryDelay: summaryDelay, SummaryRetry: summaryRetry})
 		if err != nil {
 			return err
 		}
 		defer adapter.Close()
+		summaries := make(chan struct{})
+		go func() {
+			defer close(summaries)
+			if generator == nil {
+				return
+			}
+			if err := adapter.RunSummaries(ctx, cfg.Summary.Concurrency); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "summary queue:", err)
+			}
+		}()
+		// The workers use the adapter. Close it after they stop.
+		defer func() { <-summaries }()
 		srv := &http.Server{Addr: cfg.Addr, Handler: server.NewHandler(adapter), ReadHeaderTimeout: 10 * time.Second}
 		done := make(chan struct{})
 		go func() {

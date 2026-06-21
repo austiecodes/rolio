@@ -11,7 +11,6 @@ import (
 
 	"github.com/austiecodes/rolio/internal/document"
 	"github.com/austiecodes/rolio/internal/store"
-	"github.com/austiecodes/rolio/internal/summary"
 	"github.com/jackc/pgx/v5"
 	"gopkg.in/yaml.v3"
 )
@@ -99,8 +98,10 @@ func (d *DocAdapter) Reindex(ctx context.Context) (*store.IndexStatus, error) {
 	return d.indexStatus(ctx)
 }
 
-// Invalidation participates in the same transaction as the original write.
-// Clearing tokens prevents in-flight generations from publishing old content.
+// invalidate makes the summaries of a changed path and of its ancestors
+// stale, in the transaction of the write. With a model, it also puts them in
+// the summary queue. It removes the token, thus a generation in progress
+// cannot publish a summary of the old content.
 func (d *DocAdapter) invalidate(ctx context.Context, tx pgx.Tx, p string, deleted bool) error {
 	table, _ := quoteTable(d.cfg.Schema, "rolio_summaries")
 	if deleted {
@@ -108,7 +109,14 @@ func (d *DocAdapter) invalidate(ctx context.Context, tx pgx.Tx, p string, delete
 			return err
 		}
 	}
-	_, err := tx.Exec(ctx, "update "+table+" set status='stale', token='', error='' where path='/' or starts_with($1,path||'/')", p)
+	paths, parents := summaryPaths(p, !deleted)
+	if d.cfg.Generator == nil {
+		_, err := tx.Exec(ctx, "update "+table+" set status='stale', token='', error='' where path=any($1)", paths)
+		return err
+	}
+	// The delay collects the writes of a short period into one job.
+	_, err := tx.Exec(ctx, "insert into "+table+"(path,parent,language,status,due) select path, parent, $3, 'stale', now()+$4::interval from unnest($1::text[],$2::text[]) as t(path,parent)"+
+		" on conflict(path) do update set status='stale', token='', error='', attempts=0, due=excluded.due", paths, parents, d.cfg.Language, d.cfg.SummaryDelay)
 	return err
 }
 func (d *DocAdapter) Summary(ctx context.Context, p string) (*store.Summary, error) {
@@ -122,10 +130,7 @@ func (d *DocAdapter) Summary(ctx context.Context, p string) (*store.Summary, err
 	if err != nil {
 		return nil, err
 	}
-	if isFile {
-		return nil, store.ErrNotDir
-	}
-	if !exists && p != "/" {
+	if !isFile && !exists && p != "/" {
 		return nil, store.ErrNotFound
 	}
 	s := &store.Summary{Path: p, Language: d.cfg.Language, Status: "missing"}
@@ -142,9 +147,6 @@ func (d *DocAdapter) Summary(ctx context.Context, p string) (*store.Summary, err
 	if s.Language != d.cfg.Language && s.Status == "ready" {
 		s.Status = "stale"
 		s.Error = "language changed; refresh this summary"
-	} else if s.Status == "generating" && time.Since(updated) > 2*time.Minute {
-		s.Status = "failed"
-		s.Error = "generation interrupted; refresh to retry"
 	}
 	return s, nil
 }
@@ -168,104 +170,51 @@ func (d *DocAdapter) sidecar(ctx context.Context, p string) (*store.CatResponse,
 	raw := "---\n" + string(header) + "---\n\n" + body + "\n"
 	return &store.CatResponse{Path: p, Content: raw, Body: body, Metadata: meta, Hash: store.HashContent(raw)}, nil
 }
+
+// Refresh puts a path in the summary queue and waits for its summary. The
+// model is called for the path also when its input did not change. The paths
+// below it that have no summary or a failed one go into the queue too. The
+// workers of RunSummaries do the generation. After refreshLimit, Refresh
+// returns the summary with the status that it has at that time.
 func (d *DocAdapter) Refresh(ctx context.Context, p string) (*store.Summary, error) {
 	if d.cfg.Generator == nil {
 		return nil, fmt.Errorf("%w: configure summary.url and summary.model first", store.ErrNotSupported)
 	}
-	p, err := validPath(p)
+	if !d.summarizing.Load() {
+		return nil, fmt.Errorf("%w: the summary workers do not run", store.ErrNotSupported)
+	}
+	s, err := d.Summary(ctx, p)
 	if err != nil {
 		return nil, err
 	}
-	tx, err := d.beginWrite(ctx)
-	if err != nil {
+	if err := d.enqueue(ctx, s.Path, true); err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
-	paths, _ := quoteTable(d.cfg.Schema, "rolio_paths")
-	docs, _ := quoteTable(d.cfg.Schema, "rolio_documents")
-	table, _ := quoteTable(d.cfg.Schema, "rolio_summaries")
-	var isFile bool
-	if err = tx.QueryRow(ctx, "select exists(select 1 from "+paths+" where path=$1)", p).Scan(&isFile); err != nil {
-		return nil, err
-	}
-	if isFile {
-		return nil, store.ErrNotDir
-	}
-	rows, err := tx.Query(ctx, "select p.path,d.content,d.content_hash from "+paths+" p join "+docs+" d on d.id=p.doc_id where starts_with(p.path,$1) order by p.path", normalizePrefix(p))
-	if err != nil {
-		return nil, err
-	}
-	var sources []summary.Source
-	var versions [][2]string
-	size := 0
-	for rows.Next() {
-		var name, content, hash string
-		if err = rows.Scan(&name, &content, &hash); err != nil {
-			rows.Close()
+	limit := time.After(refreshLimit)
+	for {
+		s, err := d.Summary(ctx, p)
+		if err != nil {
 			return nil, err
 		}
-		doc, parseErr := parseDocument(name, content)
-		if parseErr != nil {
-			rows.Close()
-			return nil, parseErr
+		switch s.Status {
+		case "ready":
+			// A directory has no summary when no child has one, for example
+			// because all generations below it failed.
+			if s.Abstract == "" && s.Overview == "" {
+				return nil, fmt.Errorf("%w: %s has no text to summarize, or the summaries below it failed", store.ErrContentNotReady, s.Path)
+			}
+			return s, nil
+		case "failed":
+			return nil, fmt.Errorf("summary generation failed: %s", s.Error)
+		case "missing":
+			return nil, fmt.Errorf("%w: no source files", store.ErrNotFound)
 		}
-		size += len(name) + len(doc.Body)
-		if size > summary.MaxSourceBytes {
-			rows.Close()
-			return nil, fmt.Errorf("%w: directory exceeds summary input limit (%d bytes); refresh a smaller directory", store.ErrInvalidParam, summary.MaxSourceBytes)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-limit:
+			return s, nil
+		case <-time.After(200 * time.Millisecond):
 		}
-		sources = append(sources, summary.Source{Path: name, Body: doc.Body})
-		versions = append(versions, [2]string{name, hash})
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	if len(sources) == 0 {
-		return nil, fmt.Errorf("%w: directory has no source files", store.ErrNotFound)
-	}
-	versionBytes, _ := json.Marshal(versions)
-	sourceHash := store.HashContent(string(versionBytes))
-	var token string
-	err = tx.QueryRow(ctx, "insert into "+table+" as s (path,language,status,token) values($1,$2,'generating',gen_random_uuid()::text) on conflict(path) do update set status='generating',token=gen_random_uuid()::text,error='',updated_at=now() where s.status<>'generating' or s.updated_at<now()-interval '2 minutes' returning token", p, d.cfg.Language).Scan(&token)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("%w: generation already in progress", store.ErrConflict)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	genCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	result, genErr := d.cfg.Generator.Generate(genCtx, d.cfg.Language, p, sources)
-	cancel()
-	// A cancelled client must still leave a retryable persisted state.
-	saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer saveCancel()
-	if genErr != nil {
-		_, saveErr := d.pool.Exec(saveCtx, "update "+table+" set status='failed',error=$3,token='',updated_at=now() where path=$1 and token=$2", p, token, genErr.Error())
-		if saveErr != nil {
-			return nil, saveErr
-		}
-		return nil, genErr
-	}
-	// Serialize publication with writes/deletes, just as snapshot creation does.
-	saveTx, err := d.beginWrite(saveCtx)
-	if err != nil {
-		return nil, err
-	}
-	defer saveTx.Rollback(saveCtx)
-	tag, err := saveTx.Exec(saveCtx, "update "+table+" set abstract=$3,overview=$4,language=$5,source_hash=$6,status='ready',error='',token='',updated_at=now() where path=$1 and token=$2 and status='generating'", p, token, result.Abstract, result.Overview, d.cfg.Language, sourceHash)
-	if err != nil {
-		return nil, err
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, fmt.Errorf("%w: source changed during generation; refresh again", store.ErrConflict)
-	}
-	if err = saveTx.Commit(saveCtx); err != nil {
-		return nil, err
-	}
-	return d.Summary(saveCtx, p)
 }

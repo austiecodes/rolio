@@ -67,15 +67,16 @@ the HTTP response also includes parsed `body` and `metadata` for the UI.
 
 ## Context layers
 
-- **L0**: a directory's short abstract.
-- **L1**: a directory's overview and source navigation.
+- **L0**: the short abstract of a directory or a document.
+- **L1**: the overview of a directory, with navigation to its sources, or the
+  overview of a document.
 - **L2**: original documents, read on demand.
 
-L0/L1 are derived directory views. They are not three separate caches and are
-not generated for every file. Their reserved read paths are `.abstract.md` and
-`.overview.md`; they are not editable source documents or ordinary search hits.
+L0/L1 are derived views. The original documents are the only stored truth. The
+reserved read paths of a directory are `.abstract.md` and `.overview.md`; they
+are not editable source documents or ordinary search hits.
 
-Configure a Chat Completions-compatible model to enable explicit generation:
+Configure a Chat Completions-compatible model to enable generation:
 
 ```toml
 language = "zh"
@@ -92,27 +93,62 @@ output with `abstract` and `overview` fields. Provider credentials stay on the
 server. Document reads, writes, and search work without a model.
 
 ```sh
-rolio refresh /projects/payment
 rolio abstract /projects/payment
 rolio overview /projects/payment
+rolio abstract /projects/payment/guide.md
 rolio summary /projects/payment
 rolio cat /projects/payment/.abstract.md
+rolio refresh /projects/payment
 ```
 
-Refresh currently reads all descendant document bodies in the selected directory,
-with an explicit 200 KB total path/body input limit and a 90-second generation
-timeout. Larger directories must be divided into smaller scopes; content is not
-silently sampled. Refreshing a child does not automatically regenerate ancestors.
-Generation is synchronous per request, with persisted status and protection
-against duplicate concurrent requests. Interrupted attempts can be retried after
-two minutes; there is no separate worker or queue service.
+With a model, the server keeps the summaries current. No command is necessary.
 
-Source mutations invalidate existing summaries for all ancestor directories in
-the same database transaction. A generation whose source changes before it
-finishes cannot publish. Missing, generating, stale, failed, and ready states are
-visible in the UI and `rolio summary`. Old summaries remain readable with their
-original language/version, but are marked stale or failed. Reserved sidecar reads
-include system frontmatter; `abstract` and `overview` output only their bodies.
+- A write puts the document and all its ancestor directories in a summary
+  queue, in the same database transaction. Many writes to one directory in a
+  short period make one job for that directory.
+- Workers in the server take the jobs from the bottom of the tree to the top.
+  A document gets its summary from its text. A directory gets its summary from
+  the summaries of its children: the overview of each document and the
+  abstract of each subdirectory. Thus the input for a directory does not grow
+  with the size of the documents below it.
+- Only the changed document and its ancestors get new summaries. The model is
+  called only when its input changed: a change of the frontmatter only, or a
+  child with an unchanged summary, causes no call. When the summary of a path
+  changes, its parent goes into the queue.
+- A generation whose source changes before it finishes cannot publish. The
+  path stays in the queue and gets a new summary. A directory that gets writes
+  more frequently than one generation takes does not get a current summary
+  until the writes stop.
+- `summary.concurrency` sets the number of summaries that the server
+  generates at the same time. The default is 4.
+- When you configure a model for a tree that has documents, or change
+  `language`, the server puts all outdated paths in the queue at its start.
+
+A document longer than 200 KB gives only its first 200 KB to the model. An
+abstract longer than 256 characters or an overview longer than 8000 characters
+is cut. One generation has a time limit of 90 seconds. A generation that the
+server did not complete starts again after two minutes.
+
+A generation that fails is tried three times, with a longer delay each time.
+The server writes each failure to its log. After the third failure the status
+is `failed`: the old summary stays readable, and the directories above use
+it. A new write to the path, `rolio refresh`, or a start of the server tries
+again.
+
+`rolio refresh <path>` generates the summary of one path again and waits for
+the result, to a maximum of 5 minutes. For a directory, the model reads the
+summaries of the children, not the documents; only children with no summary or
+a failed one are generated again.
+
+After writes, `rolio summary /` shows `ready` when the queue is empty, because
+the root is the last job of a write. Paths with the status `failed` are not in
+the queue: examine them with `rolio summary <path>`. `rolio refresh` of a path
+with no text, or of a directory below which all generations failed, is an
+error. Missing, stale, generating, failed, and
+ready states are visible in the UI and `rolio summary`. An old summary stays
+readable while its path is stale or failed. Reserved sidecar reads include
+system frontmatter; `abstract` and `overview` output only their bodies, for a
+directory or for a document.
 
 ## Language and search
 
@@ -130,14 +166,13 @@ After changing `language`, restart the server, then run:
 
 ```sh
 rolio reindex
-rolio refresh /projects/payment
 ```
 
 Reindex rebuilds parsed metadata and search vectors transactionally for all
 existing documents. Search rejects an incomplete or mismatched index until it is
-rebuilt. Changing language marks previously ready summaries stale at read time;
-refresh desired directories explicitly. Run a single configured language per
-database/schema.
+rebuilt. With a model, the server generates all summaries again in the new
+language at its start. Without a model, summaries in the old language show as
+stale. Run a single configured language per database/schema.
 
 ## Commands and API
 
@@ -154,8 +189,8 @@ creates. `rm` recursively deletes a directory; deleting `/` is forbidden.
 | `GET /v1/ls`, `/tree`, `/cat`, `/stat`, `/grep`, `/find`, `/glob`, `/search` | Browse and search |
 | `PUT /v1/write`, `/v1/edit` | Create, replace, or edit |
 | `DELETE /v1/delete` | Delete a file or subtree |
-| `GET /v1/summary?path=/...` | Inspect directory context and freshness |
-| `POST /v1/refresh?path=/...` | Generate L0/L1 |
+| `GET /v1/summary?path=/...` | Inspect the summary of a path and its freshness |
+| `POST /v1/refresh?path=/...` | Generate L0/L1 of a path again and wait |
 | `POST /v1/reindex` | Rebuild the configured language's index |
 | `GET /v1/settings` | Public language, generator availability, index status |
 | `GET /healthz` | Liveness |

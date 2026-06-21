@@ -7,10 +7,13 @@ addr = "127.0.0.1:4837"
 dsn = "${ROLIO_POSTGRES_DSN}"
 schema = "rolio"
 
-# Optional: enable explicit L0/L1 generation with an OpenAI-compatible provider.
-# This must be the complete chat completions endpoint. No model is selected
-# automatically. Ordinary document operations work without this section.
+# Optional: enable L0/L1 generation with an OpenAI-compatible provider. The
+# server then generates the summary of each document and each directory after
+# a write. This must be the complete chat completions endpoint. No model is
+# selected automatically. Ordinary document operations work without this
+# section.
 # [summary]
 # url = "https://your-provider.example/v1/chat/completions"
 # model = "your-model"
 # api_key = "${ROLIO_SUMMARY_API_KEY}"
+# concurrency = 4

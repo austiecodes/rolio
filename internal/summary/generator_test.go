@@ -35,7 +35,7 @@ func TestChatGenerator(t *testing.T) {
 			}))
 			defer srv.Close()
 			g := ChatGenerator{URL: srv.URL, Model: "test-model", APIKey: "test-key"}
-			r, err := g.Generate(context.Background(), language, "/docs", []Source{{Path: "/docs/a.md", Body: "text"}})
+			r, err := g.Generate(context.Background(), Request{Language: language, Path: "/docs", Directory: true, Sources: []Source{{Path: "/docs/a.md", Body: "text"}}})
 			if err != nil || r.Abstract != "简短摘要" {
 				t.Fatal(r, err)
 			}
@@ -49,8 +49,23 @@ func TestProviderFailureDoesNotLeakResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 	g := ChatGenerator{URL: srv.URL, Model: "test"}
-	_, err := g.Generate(context.Background(), "en", "/", nil)
+	_, err := g.Generate(context.Background(), Request{Language: "en", Path: "/", Directory: true})
 	if err == nil || strings.Contains(err.Error(), "secret-provider-details") {
 		t.Fatal(err)
+	}
+}
+
+// A summary above the limits is cut, not refused.
+func TestLongSummaryIsCut(t *testing.T) {
+	long := strings.Repeat("长", 300)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content, _ := json.Marshal(Result{Abstract: long, Overview: "ok"})
+		json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"finish_reason": "stop", "message": map[string]string{"content": string(content)}}}})
+	}))
+	defer srv.Close()
+	g := ChatGenerator{URL: srv.URL, Model: "test"}
+	r, err := g.Generate(context.Background(), Request{Language: "zh", Path: "/a.md", Sources: []Source{{Path: "/a.md", Body: "text"}}})
+	if err != nil || len([]rune(r.Abstract)) != 256 || r.Overview != "ok" {
+		t.Fatal(len([]rune(r.Abstract)), r.Overview, err)
 	}
 }

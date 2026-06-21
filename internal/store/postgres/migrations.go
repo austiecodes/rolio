@@ -28,6 +28,12 @@ func quoteTable(schema, table string) (string, error) {
 	return s + "." + t, nil
 }
 
+// parentSQL is the SQL expression for the parent directory of a path. The
+// root has no parent.
+func parentSQL(column string) string {
+	return fmt.Sprintf("case when %[1]s='/' then '' else coalesce(nullif(regexp_replace(%[1]s,'/[^/]*$',''),''),'/') end", column)
+}
+
 // SchemaSQL creates the single-tree store without modifying legacy tables.
 func SchemaSQL(cfg Config) ([]string, error) {
 	docs, err := quoteTable(cfg.Schema, "rolio_documents")
@@ -77,6 +83,13 @@ func SchemaSQL(cfg Config) ([]string, error) {
    error text not null default '',
    token text not null default '',
    updated_at timestamptz not null default now()
-  )`, summaries))
+  )`, summaries),
+		// A summary row is also a job of the summary queue: see summarize.go.
+		fmt.Sprintf("alter table %s add column if not exists parent text not null default ''", summaries),
+		fmt.Sprintf("alter table %s add column if not exists due timestamptz not null default now()", summaries),
+		fmt.Sprintf("alter table %s add column if not exists attempts int not null default 0", summaries),
+		fmt.Sprintf("update %s set parent=%s where parent='' and path<>'/'", summaries, parentSQL("path")),
+		fmt.Sprintf("create index if not exists rolio_summaries_parent on %s(parent)", summaries),
+		fmt.Sprintf("create index if not exists rolio_summaries_queue on %s(due) where status in ('stale','generating')", summaries))
 	return statements, nil
 }

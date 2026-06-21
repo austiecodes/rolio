@@ -2,7 +2,8 @@ package store
 
 import "context"
 
-// Summaries are derived directory views. They never own the original documents.
+// Summaries are derived views of documents and directories. They never own
+// the original documents.
 type Summary struct {
 	Path       string `json:"path"`
 	Language   string `json:"language"`

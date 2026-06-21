@@ -10,16 +10,17 @@ import (
 func NewContextCommands(adapter store.Adapter) []*cobra.Command {
 	var commands []*cobra.Command
 	for _, name := range []string{"abstract", "overview", "summary", "refresh", "reindex"} {
-		cmd := &cobra.Command{Use: name + " <directory>", Args: cobra.ExactArgs(1)}
+		cmd := &cobra.Command{Use: name + " <path>", Args: cobra.ExactArgs(1)}
 		switch name {
 		case "abstract":
-			cmd.Short = "Read a directory's L0 abstract"
+			cmd.Short = "Read the L0 abstract of a directory or a document"
 		case "overview":
-			cmd.Short = "Read a directory's L1 overview"
+			cmd.Short = "Read the L1 overview of a directory or a document"
 		case "summary":
-			cmd.Short = "Inspect directory summary status and metadata"
+			cmd.Short = "Inspect summary status and metadata"
 		case "refresh":
-			cmd.Short = "Generate L0/L1 for a directory using the configured model"
+			cmd.Short = "Generate L0/L1 for a path again and wait for the result"
+			cmd.Long = "Generate the summary of a path again and wait for the result.\n\nFor a document, the model reads the document. For a directory, the model reads\nthe summaries of its children, not the documents: only children with no summary\nor a failed one are generated again. The command waits a maximum of 5 minutes and\nthen shows the status at that time."
 		case "reindex":
 			cmd.Use = name
 			cmd.Args = cobra.NoArgs
