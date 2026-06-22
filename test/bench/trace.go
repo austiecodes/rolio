@@ -30,10 +30,18 @@ type evidence struct {
 var (
 	// The events that have the tool calls and the answers.
 	traceEvents = []string{"tool_execution_start", "tool_execution_end"}
-	// The output of rolio search: one line for each document, each with a
-	// snippet below it, or one line when there is no document.
-	searchLine    = regexp.MustCompile(`(?m)^(/\S+)    \[rank: `)
-	searchSnippet = regexp.MustCompile(`(?m)^/\S+    \[rank: .*\n(  .*\n)*`)
+	// The output of rolio search: one block for each document, then the
+	// directories, or one line when there is no document. A block is the
+	// line of the document and the indented lines below it.
+	searchLine  = regexp.MustCompile(`(?m)^(/\S+)    \[rank: `)
+	searchBlock = regexp.MustCompile(`(?m)^/\S+    \[rank: .*\n(  .*\n)*`)
+	// A passage is a line of the document that the search found.
+	searchPassage = regexp.MustCompile(`(?m)^  > .*\n`)
+	// The abstract of a document, the number of its other lines that agree
+	// with the query, and the lines of the directories are not text of a
+	// document. A filter such as grep can show them without the line of
+	// their document, thus they are removed in all positions.
+	searchSummary = regexp.MustCompile(`(?m)^(  abstract: .*|  \(\d+\+? more lines match; rolio cat .* shows the document\)|directories:|  /\S*/(    .*)?)\n`)
 	noResults     = regexp.MustCompile(`(?m)^no results found$`)
 )
 
@@ -84,9 +92,10 @@ func traceResults(trace []byte) []string {
 // A result counts also when its call failed: the exit status of a call is
 // that of its last command, and the agent saw the text in each case.
 type retrieval struct {
-	// Seen is the number of evidence turns in the results. The snippet of a
-	// search result is the start of a document and not the text that the
-	// search found, thus it does not count.
+	// Seen is the number of evidence turns in the results. In the output of
+	// rolio search, only the passages count: an abstract is not text of the
+	// document, and a search of an earlier version showed the start of the
+	// document and not the text that it found.
 	Seen int
 	// Listed is the number of evidence documents in the lines of search
 	// results.
@@ -102,7 +111,9 @@ func measure(results []string, e evidence) retrieval {
 	var listed, content []string
 	afterEmpty := false
 	for _, result := range results {
-		content = append(content, searchSnippet.ReplaceAllString(result, ""))
+		content = append(content, searchSummary.ReplaceAllString(searchBlock.ReplaceAllStringFunc(result, func(block string) string {
+			return strings.Join(searchPassage.FindAllString(block, -1), "")
+		}), ""))
 		lines := searchLine.FindAllStringSubmatch(result, -1)
 		if len(lines) == 0 && !noResults.MatchString(result) {
 			continue

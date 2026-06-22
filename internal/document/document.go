@@ -4,6 +4,7 @@ package document
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -64,42 +65,136 @@ func Parse(raw string) (Document, error) {
 	return d, nil
 }
 
+// scan calls han for each run of Han characters and word for each run of
+// other letters and digits, in lower case, in the order of the text.
+func scan(text string, han func([]rune), word func(string)) {
+	var run, letters []rune
+	flush := func() {
+		if len(run) > 0 {
+			han(run)
+			run = nil
+		}
+		if len(letters) > 0 {
+			word(string(letters))
+			letters = nil
+		}
+	}
+	for _, r := range text {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			if len(letters) > 0 {
+				flush()
+			}
+			run = append(run, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if len(run) > 0 {
+				flush()
+			}
+			letters = append(letters, unicode.ToLower(r))
+		default:
+			flush()
+		}
+	}
+	flush()
+}
+
 // Tokens splits Han runs into unigrams and overlapping bigrams, retaining
 // Latin words for PostgreSQL's stemmer.
 // No dictionary, external extension or runtime model is required.
 func Tokens(text string) string {
 	var tokens []string
-	var run []rune
-	flush := func() {
+	scan(text, func(run []rune) {
 		for _, r := range run {
 			tokens = append(tokens, string(r))
 		}
 		for i := 0; i+1 < len(run); i++ {
 			tokens = append(tokens, string(run[i:i+2]))
 		}
-		run = nil
-	}
-	var word []rune
-	flushWord := func() {
-		if len(word) > 0 {
-			tokens = append(tokens, string(word))
-			word = nil
+	}, func(word string) { tokens = append(tokens, word) })
+	return strings.Join(tokens, " ")
+}
+
+// QueryTerms returns the different terms of a search query, to a maximum of
+// limit terms. Each term is one token of Tokens, thus it contains only
+// letters and digits. A search finds the documents that contain one or more
+// of the terms. Nearly all Chinese documents contain each of the frequent
+// characters, thus a Han run of two or more characters gives its bigrams and
+// not its characters.
+func QueryTerms(query string, limit int) []string {
+	var terms []string
+	add := func(term string) {
+		if len(terms) < limit && !slices.Contains(terms, term) {
+			terms = append(terms, term)
 		}
 	}
-	for _, r := range text {
-		if unicode.Is(unicode.Han, r) {
-			flushWord()
-			run = append(run, r)
-		} else {
-			flush()
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				word = append(word, unicode.ToLower(r))
-			} else {
-				flushWord()
+	scan(query, func(run []rune) {
+		if len(run) == 1 {
+			add(string(run))
+		}
+		for i := 0; i+1 < len(run) && len(terms) < limit; i++ {
+			add(string(run[i : i+2]))
+		}
+	}, add)
+	return terms
+}
+
+// labelLength is the maximum number of characters of the label of a line.
+const labelLength = 40
+
+// lineLabel returns the label of a line: its text to the first ": ", when
+// that is in the first characters of the line. In a conversation this is the
+// speaker, for example "[user]: ".
+func lineLabel(line []rune) string {
+	for i := 0; i+1 < len(line) && i+2 <= labelLength; i++ {
+		if line[i] == ':' && line[i+1] == ' ' {
+			return string(line[:i+2])
+		}
+	}
+	return ""
+}
+
+// Passages divides a text into its lines without the empty lines, and a line
+// that is longer than limit characters into parts of that length or less.
+// A part ends at a space when that is possible. The mark "..." shows the
+// side of a part where the line continues. A part that is not the start of
+// its line starts with the label of the line, thus it shows where it is from.
+// The label and the marks are not in the limit.
+func Passages(text string, limit int) []string {
+	var passages []string
+	for line := range strings.SplitSeq(text, "\n") {
+		runes := []rune(line)
+		// The part of the line that is not divided yet is runes[start:end].
+		start, end := 0, len(runes)
+		for start < end && unicode.IsSpace(runes[start]) {
+			start++
+		}
+		for end > start && unicode.IsSpace(runes[end-1]) {
+			end--
+		}
+		before := ""
+		for end-start > limit {
+			cut := start + limit
+			// A space in the first half makes a part that is too short.
+			for i := cut; i > start+limit/2; i-- {
+				if unicode.IsSpace(runes[i]) {
+					cut = i
+					break
+				}
+			}
+			partEnd := cut
+			for unicode.IsSpace(runes[partEnd-1]) {
+				partEnd--
+			}
+			passages = append(passages, before+string(runes[start:partEnd])+" ...")
+			if before == "" {
+				before = lineLabel(runes[start:end]) + "... "
+			}
+			for start = cut; start < end && unicode.IsSpace(runes[start]); start++ {
 			}
 		}
+		if start < end {
+			passages = append(passages, before+string(runes[start:end]))
+		}
 	}
-	flush()
-	flushWord()
-	return strings.Join(tokens, " ")
+	return passages
 }

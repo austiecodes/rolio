@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/austiecodes/rolio/internal/store"
@@ -199,5 +201,45 @@ func TestAdapterFindLimitOffset(t *testing.T) {
 	}
 	if resp.Nodes[0].Name != "c.go" || resp.Nodes[1].Name != "d.go" {
 		t.Fatalf("Find(offset=2) nodes = %v, want c,d", resp.Nodes)
+	}
+}
+
+func TestAdapterSearch(t *testing.T) {
+	tree, err := vfs.New([]vfs.File{
+		{Path: "/docs/a.md", Content: "---\ntitle: retry guide\n---\n\n# Guide\n\nThe payment fails.\n"},
+		{Path: "/docs/b.md", Content: "Retry the payment.\n\nNo more.\n"},
+		{Path: "/docs/c.md", Content: "Other text.\n"},
+		{Path: "/notes/d.md", Content: "payment\n"},
+		{Path: "/notes/many.md", Content: "walrus 1\nwalrus 2\nwalrus 3\nwalrus 4\nwalrus 5\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := New(tree)
+	ctx := context.Background()
+	resp, err := adapter.Search(ctx, store.SearchRequest{Query: "retry PAYMENT", Path: "/docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The two documents have the two terms. Only the body gives passages.
+	if resp.Total != 2 || resp.Results[0].Path != "/docs/a.md" || resp.Results[1].Path != "/docs/b.md" ||
+		!slices.Equal(resp.Results[0].Passages, []string{"The payment fails."}) || resp.Results[1].Snippet != "Retry the payment." {
+		t.Fatalf("Search() = %+v", resp)
+	}
+	// A document with all terms comes before a document with one term.
+	resp, err = adapter.Search(ctx, store.SearchRequest{Query: "retry payment", Path: "/", Limit: 1, Offset: 2})
+	if err != nil || resp.Total != 3 || len(resp.Results) != 1 || resp.Results[0].Path != "/notes/d.md" {
+		t.Fatalf("Search() page = %+v, %v", resp, err)
+	}
+	// The result has the number of the lines that are not passages.
+	resp, err = adapter.Search(ctx, store.SearchRequest{Query: "walrus", Path: "/"})
+	if err != nil || len(resp.Results) != 1 || len(resp.Results[0].Passages) != 3 || resp.Results[0].MoreLines != 2 {
+		t.Fatalf("Search() with many lines = %+v, %v", resp, err)
+	}
+	if resp, err = adapter.Search(ctx, store.SearchRequest{Query: "absent"}); err != nil || resp.Total != 0 || resp.Results == nil {
+		t.Fatalf("Search() without a result = %+v, %v", resp, err)
+	}
+	if _, err = adapter.Search(ctx, store.SearchRequest{Query: " ?"}); !errors.Is(err, store.ErrEmptyQuery) {
+		t.Fatalf("Search() with an empty query: %v", err)
 	}
 }

@@ -11,6 +11,12 @@
 # Environment:
 #   ROLIO_LANGUAGE  zh or en; default: en
 #   ROLIO_TEST_PORT port of the temporary server; default: 4857
+#   ROLIO_SUMMARY_URL, ROLIO_SUMMARY_MODEL
+#                   chat completions endpoint and model for the summaries.
+#                   Set the two variables, or the server has no summaries
+#   ROLIO_SUMMARY_API_KEY      key for the endpoint; default: no key. Only
+#                   the server gets it: the command does not
+#   ROLIO_SUMMARY_CONCURRENCY  parallel generations; default: the server default
 #   KEEP=1          do not stop the server and the database at exit
 set -euo pipefail
 
@@ -67,6 +73,24 @@ addr = "127.0.0.1:$port"
 dsn = "postgres://postgres:rolio-test-only@127.0.0.1:$pg_port/postgres?sslmode=disable"
 schema = "rolio"
 TOML
+if [ -n "${ROLIO_SUMMARY_URL:-}" ] && [ -n "${ROLIO_SUMMARY_MODEL:-}" ]; then
+	# The server reads the key from its environment. The file and the output
+	# of this script do not contain it.
+	cat >>"$run/rolio-server.toml" <<TOML
+
+[summary]
+url = "$ROLIO_SUMMARY_URL"
+model = "$ROLIO_SUMMARY_MODEL"
+api_key = "\${ROLIO_SUMMARY_API_KEY}"
+TOML
+	if [ -n "${ROLIO_SUMMARY_CONCURRENCY:-}" ]; then
+		echo "concurrency = $ROLIO_SUMMARY_CONCURRENCY" >>"$run/rolio-server.toml"
+	fi
+	echo "summaries: model $ROLIO_SUMMARY_MODEL"
+elif [ -n "${ROLIO_SUMMARY_URL:-}${ROLIO_SUMMARY_MODEL:-}" ]; then
+	echo "set ROLIO_SUMMARY_URL and ROLIO_SUMMARY_MODEL together" >&2
+	exit 2
+fi
 "$run/bin/rolio-server" --config "$run/rolio-server.toml" >"$run/server.log" 2>&1 &
 server_pid=$!
 for _ in $(seq 1 60); do
@@ -79,6 +103,7 @@ export ROLIO_SERVER="http://127.0.0.1:$port"
 export ROLIO_RUN="$run"
 export PATH="$run/bin:$PATH"
 status=0
-"$@" || status=$?
+# This is not a strong barrier: the server process still has the key.
+env -u ROLIO_SUMMARY_API_KEY "$@" || status=$?
 echo "run directory: $run"
 exit "$status"

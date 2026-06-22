@@ -90,6 +90,10 @@ func SchemaSQL(cfg Config) ([]string, error) {
 		fmt.Sprintf("alter table %s add column if not exists attempts int not null default 0", summaries),
 		fmt.Sprintf("update %s set parent=%s where parent='' and path<>'/'", summaries, parentSQL("path")),
 		fmt.Sprintf("create index if not exists rolio_summaries_parent on %s(parent)", summaries),
-		fmt.Sprintf("create index if not exists rolio_summaries_queue on %s(due) where status in ('stale','generating')", summaries))
+		fmt.Sprintf("create index if not exists rolio_summaries_queue on %s(due) where status in ('stale','generating')", summaries),
+		// The search vector of the abstract and the overview: see search.go.
+		fmt.Sprintf("alter table %s add column if not exists search_vector tsvector", summaries),
+		fmt.Sprintf("alter table %s add column if not exists search_language text not null default ''", summaries),
+		fmt.Sprintf("create index if not exists rolio_summaries_search on %s using gin(search_vector)", summaries))
 	return statements, nil
 }

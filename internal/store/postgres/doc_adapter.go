@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/rolio/internal/document"
 	"github.com/austiecodes/rolio/internal/store"
 	"github.com/austiecodes/rolio/internal/summary"
 	"github.com/austiecodes/rolio/internal/vfs"
@@ -59,11 +58,17 @@ func Connect(ctx context.Context, cfg Config) (*DocAdapter, error) {
 			}
 		}
 	}
+	adapter := NewDocAdapter(pool, cfg)
+	if err == nil {
+		// A database of an earlier version has summaries without a search
+		// vector, and a different language makes the vectors stale.
+		err = adapter.indexSummaries(ctx)
+	}
 	if err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return NewDocAdapter(pool, cfg), nil
+	return adapter, nil
 }
 func (d *DocAdapter) Close() { d.pool.Close() }
 
@@ -224,84 +229,6 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 	nodes = paginateNodes(nodes, req.Limit, req.Offset)
 
 	return &store.FindResponse{Nodes: nodes, Total: total}, nil
-}
-
-func (d *DocAdapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
-	if strings.TrimSpace(req.Query) == "" {
-		return nil, store.ErrEmptyQuery
-	}
-	if req.Offset < 0 || req.Limit < 0 {
-		return nil, store.ErrInvalidParam
-	}
-	status, err := d.indexStatus(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if status.Stale > 0 {
-		return nil, fmt.Errorf("%w: search index language changed or index is missing; run rolio reindex", store.ErrConflict)
-	}
-	req.Query = document.Tokens(req.Query)
-	if req.Query == "" {
-		return nil, store.ErrEmptyQuery
-	}
-
-	pathFilter := cleanDocPath(req.Path)
-	if pathFilter == "/" {
-		pathFilter = ""
-	}
-
-	countQuery, err := DocSearchCountSQL(d.cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	var total int
-	if err := d.pool.QueryRow(ctx, countQuery, req.Query, pathFilter).Scan(&total); err != nil {
-		return nil, fmt.Errorf("doc search count: %w", err)
-	}
-	if total == 0 {
-		return &store.SearchResponse{Total: 0}, nil
-	}
-
-	dataQuery, err := DocSearchDataSQL(d.cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-
-	rows, err := d.pool.Query(ctx, dataQuery, req.Query, pathFilter, limit, req.Offset)
-	if err != nil {
-		return nil, fmt.Errorf("doc search data: %w", err)
-	}
-	defer rows.Close()
-
-	var results []store.SearchResult
-	for rows.Next() {
-		var filePath string
-		var rank float64
-		var snippet string
-		var size int64
-		var mtime time.Time
-		if err := rows.Scan(&filePath, &rank, &snippet, &size, &mtime); err != nil {
-			return nil, fmt.Errorf("doc search scan: %w", err)
-		}
-		results = append(results, store.SearchResult{
-			Path:    filePath,
-			Rank:    rank,
-			Snippet: snippet,
-			Size:    size,
-			ModTime: mtime.UTC().Format(time.RFC3339),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("doc search rows: %w", err)
-	}
-
-	return &store.SearchResponse{Results: results, Total: total}, nil
 }
 
 func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {

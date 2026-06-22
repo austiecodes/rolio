@@ -207,21 +207,41 @@ type Editor interface {
 type SearchRequest struct {
 	Query  string
 	Path   string // scope to this path prefix, empty = whole tree
-	Limit  int    // max results, default 20
+	Limit  int    // max results, default 10, maximum 100
 	Offset int    // skip first N results
 }
 
 type SearchResult struct {
-	Path    string  `json:"path"`
-	Rank    float64 `json:"rank"`
-	Snippet string  `json:"snippet"`
-	Size    int64   `json:"size"`
-	ModTime string  `json:"mod_time,omitempty"`
+	Path string  `json:"path"`
+	Rank float64 `json:"rank"`
+	// Abstract is the L0 summary of the document, when it has one.
+	Abstract string `json:"abstract,omitempty"`
+	// Passages are the lines of the document body that agree best with the
+	// query, in the order of the document.
+	Passages []string `json:"passages,omitempty"`
+	// MoreLines is the number of lines that agree with the query and are
+	// not in Passages. With MoreLinesMin, the search did not examine all
+	// lines of the document, and the number is a lower limit.
+	MoreLines    int  `json:"more_lines,omitempty"`
+	MoreLinesMin bool `json:"more_lines_min,omitempty"`
+	// Snippet is the passages as one text.
+	Snippet string `json:"snippet"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+// SearchDirectory is a directory of which the summary agrees with the query.
+type SearchDirectory struct {
+	Path     string `json:"path"`
+	Abstract string `json:"abstract"`
 }
 
 type SearchResponse struct {
 	Results []SearchResult `json:"results"`
-	Total   int            `json:"total"`
+	// Directories are the directories that agree best with the query.
+	Directories []SearchDirectory `json:"directories,omitempty"`
+	// Total is the number of documents that agree with the query.
+	Total int `json:"total"`
 }
 
 type Searcher interface {

@@ -272,11 +272,13 @@ func (d *DocAdapter) summarizeNext(ctx context.Context) (bool, error) {
 	changed := result.Abstract != job.abstract || result.Overview != job.overview
 	_, err = d.pool.Exec(ctx, fmt.Sprintf(`with done as (
   update %[1]s set abstract=$3, overview=$4, language=$5, source_hash=$6, status='ready', error='', attempts=0, token='',
+   search_vector=to_tsvector($8::regconfig,$9), search_language=$5,
    updated_at=case when $7 then now() else updated_at end %[2]s returning parent
  )
  update %[1]s set status='stale', token='', attempts=0, due=case when status='stale' then due else now() end
  where $7 and path=(select parent from done)`, table, current),
-		job.path, job.token, result.Abstract, result.Overview, d.cfg.Language, sourceHash, changed)
+		job.path, job.token, result.Abstract, result.Overview, d.cfg.Language, sourceHash, changed,
+		searchConfig(d.cfg.Language), summaryTokens(result.Abstract, result.Overview))
 	return finish(err)
 }
 

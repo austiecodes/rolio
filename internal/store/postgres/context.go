@@ -92,6 +92,9 @@ func (d *DocAdapter) Reindex(ctx context.Context) (*store.IndexStatus, error) {
 			return nil, err
 		}
 	}
+	if err = d.indexSummariesTx(ctx, tx, true); err != nil {
+		return nil, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}

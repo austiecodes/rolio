@@ -47,49 +47,6 @@ func DocStatSQL(cfg Config) (string, error) {
 	), nil
 }
 
-// DocSearchCountSQL returns a query that counts full-text search results.
-func DocSearchCountSQL(cfg Config) (string, error) {
-	pathsTable, err := quoteTable(cfg.Schema, "rolio_paths")
-	if err != nil {
-		return "", err
-	}
-	docsTable, err := quoteTable(cfg.Schema, "rolio_documents")
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(
-		"select count(*) from %s rp join %s d on rp.doc_id = d.id, "+
-			"plainto_tsquery('%s', $1) as query "+
-			"where d.search_vector @@ query "+
-			"and ($2 = '' or rp.path = $2 or starts_with(rp.path, $2 || '/'))",
-		pathsTable, docsTable, searchConfig(cfg.Language),
-	), nil
-}
-
-// DocSearchDataSQL returns a query that selects full-text search results with
-// rank and snippet.
-func DocSearchDataSQL(cfg Config) (string, error) {
-	pathsTable, err := quoteTable(cfg.Schema, "rolio_paths")
-	if err != nil {
-		return "", err
-	}
-	docsTable, err := quoteTable(cfg.Schema, "rolio_documents")
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(
-		"select rp.path, ts_rank_cd(d.search_vector, query, 32) as rank, "+
-			"left(d.content, 240) as snippet, "+
-			"rp.size, rp.mtime "+
-			"from %s rp join %s d on rp.doc_id = d.id, "+
-			"plainto_tsquery('%s', $1) as query "+
-			"where d.search_vector @@ query "+
-			"and ($2 = '' or rp.path = $2 or starts_with(rp.path, $2 || '/')) "+
-			"order by rank desc, rp.path limit $3 offset $4",
-		pathsTable, docsTable, searchConfig(cfg.Language),
-	), nil
-}
-
 // DocStreamGrepSQL returns a query that streams (path, content) for grep.
 func DocStreamGrepSQL(cfg Config) (string, error) {
 	pathsTable, err := quoteTable(cfg.Schema, "rolio_paths")

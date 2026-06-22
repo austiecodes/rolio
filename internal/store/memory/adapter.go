@@ -1,11 +1,14 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
+	"github.com/austiecodes/rolio/internal/document"
 	"github.com/austiecodes/rolio/internal/store"
 	"github.com/austiecodes/rolio/internal/vfs"
 )
@@ -129,79 +132,74 @@ func (a *Adapter) Edit(_ context.Context, req store.EditRequest) (*store.EditRes
 	return &store.EditResponse{Path: req.Path, Replaced: replaced, Content: content}, nil
 }
 
+// Search finds the documents that contain one or more of the query terms.
+// Documents with more of the terms come first. A term agrees with a text when
+// the text contains it: this adapter has no stemmer and no summaries.
 func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
+	terms := document.QueryTerms(req.Query, 16)
+	if len(terms) == 0 {
 		return nil, store.ErrEmptyQuery
 	}
 	limit := req.Limit
 	if limit <= 0 {
-		limit = 20
+		limit = 10
 	}
-	terms := strings.Fields(strings.ToLower(query))
+	// matched returns the number of terms that a text contains.
+	matched := func(text string) int {
+		text = strings.ToLower(text)
+		n := 0
+		for _, term := range terms {
+			if strings.Contains(text, term) {
+				n++
+			}
+		}
+		return n
+	}
 
-	nodes, err := a.tree.Find(req.Path, "", vfs.FindOptions{Type: "file", All: true})
+	nodes, err := a.tree.Find(req.Path, "*", vfs.FindOptions{Type: "file", All: true})
 	if err != nil {
 		return nil, err
 	}
-
-	var results []store.SearchResult
-	total := 0
+	results := []store.SearchResult{}
 	for _, n := range nodes {
 		content, err := a.tree.Cat(n.Path)
 		if err != nil {
 			continue
 		}
-		lowerContent := strings.ToLower(content)
-		match := true
-		for _, t := range terms {
-			if !strings.Contains(lowerContent, t) {
-				match = false
-				break
+		count := matched(content)
+		if count == 0 {
+			continue
+		}
+		body := content
+		if doc, err := document.Parse(content); err == nil {
+			body = doc.Body
+		}
+		var passages []string
+		more := 0
+		for _, line := range document.Passages(body, 480) {
+			switch {
+			case matched(line) == 0:
+			case len(passages) < 3:
+				passages = append(passages, line)
+			default:
+				more++
 			}
 		}
-		if !match {
-			continue
-		}
-		total++
-		if total <= req.Offset {
-			continue
-		}
-		if len(results) >= limit {
-			continue
-		}
-		snippet := snippetFromContent(content, terms)
 		results = append(results, store.SearchResult{
-			Path:    n.Path,
-			Rank:    1.0,
-			Snippet: snippet,
-			Size:    n.Size,
-			ModTime: n.ModTime,
+			Path:      n.Path,
+			Rank:      float64(count) / float64(len(terms)),
+			Passages:  passages,
+			MoreLines: more,
+			Snippet:   strings.Join(passages, "\n"),
+			Size:      n.Size,
+			ModTime:   n.ModTime,
 		})
 	}
-	if results == nil {
-		results = []store.SearchResult{}
-	}
+	slices.SortStableFunc(results, func(x, y store.SearchResult) int { return cmp.Compare(y.Rank, x.Rank) })
+	total := len(results)
+	results = results[min(max(req.Offset, 0), total):]
+	results = results[:min(limit, len(results))]
 	return &store.SearchResponse{Results: results, Total: total}, nil
-}
-
-func snippetFromContent(content string, terms []string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		lower := strings.ToLower(line)
-		for _, t := range terms {
-			if strings.Contains(lower, t) && len(strings.TrimSpace(line)) > 0 {
-				if len(line) > 200 {
-					return line[:200] + "..."
-				}
-				return line
-			}
-		}
-	}
-	if len(content) > 200 {
-		return content[:200] + "..."
-	}
-	return content
 }
 
 func (a *Adapter) Glob(_ context.Context, req store.GlobRequest) (*store.GlobResponse, error) {

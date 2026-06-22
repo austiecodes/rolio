@@ -153,7 +153,7 @@ func (f *fakeClient) Search(_ context.Context, req store.SearchRequest) (*store.
 	}
 	return &store.SearchResponse{
 		Results: []store.SearchResult{
-			{Path: "/docs/guide.md", Rank: 0.9, Snippet: "**test** result", Size: 100, ModTime: "2026-01-01"},
+			{Path: "/docs/guide.md", Rank: 0.9, Passages: []string{"test result"}, MoreLines: 4, Snippet: "test result", Size: 100, ModTime: "2026-01-01"},
 		},
 		Total: 1,
 	}, nil
@@ -1222,11 +1222,65 @@ func TestSearchHumanOutput(t *testing.T) {
 	if !strings.Contains(got, "rank: 0.90") {
 		t.Fatalf("search output missing rank: %q", got)
 	}
-	if !strings.Contains(got, "test result") {
-		t.Fatalf("search output missing snippet: %q", got)
+	if !strings.Contains(got, "  > test result\n") {
+		t.Fatalf("search output missing passage: %q", got)
 	}
 	if client.searchReq.Query != "test query" {
 		t.Fatalf("search query = %q, want 'test query'", client.searchReq.Query)
+	}
+}
+
+// test/bench/trace.go reads this format.
+func TestSearchOutputFormat(t *testing.T) {
+	client := &fakeClient{searchResp: &store.SearchResponse{
+		Results: []store.SearchResult{
+			{Path: "/docs/guide.md", Rank: 0.123, Abstract: "How to retry\n a payment.", Passages: []string{"Retry three times.", "Then  stop."}, MoreLines: 12, Size: 2048},
+			{Path: "/docs/summary only.md", Rank: 0.05, Abstract: "Payments.", MoreLinesMin: true, Size: 10},
+			{Path: "/docs/plain.md", Rank: 1.5, Passages: []string{"A payment."}, Size: 3 << 20},
+			{Path: "/docs/long.md", Rank: 0.5, Passages: []string{"A payment."}, MoreLines: 1997, MoreLinesMin: true, Size: 100},
+		},
+		Directories: []store.SearchDirectory{{Path: "/docs", Abstract: "Payment\nknowledge."}, {Path: "/empty"}},
+		Total:       7,
+	}}
+	got := executeWithClient(t, client, "search", "payment", "--offset", "2")
+	want := `/docs/guide.md    [rank: 0.12, 2.0KB]
+  abstract: How to retry a payment.
+  > Retry three times.
+  > Then stop.
+  (12 more lines match; rolio cat /docs/guide.md shows the document)
+
+/docs/summary only.md    [rank: 0.05, 10B]
+  abstract: Payments.
+  (0+ more lines match; rolio cat /docs/summary only.md shows the document)
+
+/docs/plain.md    [rank: 1.50, 3.0MB]
+  > A payment.
+
+/docs/long.md    [rank: 0.50, 100B]
+  > A payment.
+  (1997+ more lines match; rolio cat /docs/long.md shows the document)
+
+directories:
+  /docs/    Payment knowledge.
+  /empty/
+
+showing 3-6 of 7
+`
+	if got != want {
+		t.Errorf("search output:\n%s\nwant:\n%s", got, want)
+	}
+
+	client.searchResp = &store.SearchResponse{Directories: []store.SearchDirectory{{Path: "/docs", Abstract: "Payment knowledge."}}, Total: 7}
+	// Without a document, the directories come after the line that says so.
+	if got := executeWithClient(t, client, "search", "payment", "--offset", "9"); got != "no results found\ndirectories:\n  /docs/    Payment knowledge.\n" {
+		t.Errorf("search output with only a directory = %q", got)
+	}
+	client.searchResp = &store.SearchResponse{}
+	if got := executeWithClient(t, client, "search", "payment"); got != "no results found\n" {
+		t.Errorf("empty search output = %q", got)
+	}
+	if client.searchReq.Limit != 10 {
+		t.Errorf("default limit = %d, want 10", client.searchReq.Limit)
 	}
 }
 
@@ -1242,6 +1296,11 @@ func TestSearchJSONOutput(t *testing.T) {
 	}
 	if resp.Results[0].Path != "/docs/guide.md" {
 		t.Fatalf("result path = %q, want /docs/guide.md", resp.Results[0].Path)
+	}
+	for _, field := range []string{`"passages"`, `"snippet": "test result"`, `"more_lines": 4`} {
+		if !strings.Contains(got, field) {
+			t.Errorf("search JSON has no %s: %s", field, got)
+		}
 	}
 }
 

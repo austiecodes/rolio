@@ -33,8 +33,8 @@ func TestMeasure(t *testing.T) {
 		result("no results found\n"+tree) +
 		// rolio search support; echo ---; grep zzz file: the call fails, the search does not.
 		result(hit+other+"---\n\nCommand exited with code 1") +
-		// The snippet of a search result is the start of the document. It
-		// has the first turn, but the search did not find that turn.
+		// A search of an earlier version showed the start of the document.
+		// It has the first turn, but the search did not find that turn.
 		result("/conversations/c/session-02.md    [rank: 0.10, 2.0KB]\n  ---\n  title: \"A and B, session 2\"\n  ---\n  # Conversation\n  [Melanie] (D2:1): Hi.\n\n") +
 		// A loop that reads all documents names none of them.
 		// Text of a document is not the output of a search.
@@ -48,6 +48,57 @@ func TestMeasure(t *testing.T) {
 	want := retrieval{Seen: 2, Listed: 2, Searches: 4, Empty: 2, Repeated: 1}
 	if got != want {
 		t.Errorf("measure = %+v, want %+v", got, want)
+	}
+}
+
+// The passages of a search result are text that the search found. The
+// abstract of a document and the directories are not text of a document.
+func TestMeasurePassages(t *testing.T) {
+	search := "/conversations/c/session-01.md    [rank: 0.52, 2.0KB]\n" +
+		"  abstract: Caroline tells about the group (D1:9).\n" +
+		"  > [Caroline] (D1:3): I went to the group.\n" +
+		"  > [Melanie] (D1:4): Nice.\n" +
+		"  (7 more lines match; rolio cat /conversations/d/session-01.md shows the document)\n" +
+		"\n" +
+		"/conversations/c/session-02.md    [rank: 0.31, 2.0KB]\n" +
+		"  abstract: A talk (D2:1).\n" +
+		"\n" +
+		"directories:\n" +
+		"  /conversations/c/    Two persons talk (D3:1).\n" +
+		"  /conversations/d/    Others (D3:2).\n" +
+		"\nshowing 1-2 of 5\n"
+	e := evidence{
+		Turns: [][]string{{"(D1:3)"}, {"(D1:4)"}, {"(D1:9)"}, {"(D2:1)"}, {"(D3:1)"}, {"(D3:2)"}, {"(D4:1)"}},
+		Docs:  []string{"/conversations/c/session-01.md", "/conversations/c/session-02.md", "/conversations/c/", "/conversations/d/session-01.md"},
+	}
+	// The text after the directories is not a part of them.
+	got := measure([]string{search + "[Melanie] (D4:1): Bye.\n"}, e)
+	want := retrieval{Seen: 3, Listed: 2, Searches: 1}
+	if got != want {
+		t.Errorf("measure = %+v, want %+v", got, want)
+	}
+	// rolio search x | grep -i caroline: the lines have no document line
+	// above them. An abstract and a directory do not count, a passage counts.
+	got = measure([]string{"  abstract: Caroline tells about the group (D1:9).\n  > [Caroline] (D1:3): I went to the group.\n  /conversations/c/    Caroline and Melanie talk (D3:1).\n"}, e)
+	if want = (retrieval{Seen: 1}); got != want {
+		t.Errorf("measure of filtered output = %+v, want %+v", got, want)
+	}
+	// The line with the number of other lines is not a document of a search
+	// and not text of a document, also without the line of its document.
+	got = measure([]string{"  > [Caroline] (D1:3): I went.\n  (2000+ more lines match; rolio cat /conversations/d/session-01.md (D1:9) shows the document)\n"}, e)
+	if want = (retrieval{Seen: 1}); got != want {
+		t.Errorf("measure of the number of other lines = %+v, want %+v", got, want)
+	}
+	// A line of a different command that starts with a slash is not a
+	// directory of a search result.
+	got = measure([]string{"  /* Caroline (D1:9) */\n  /conversations/c/    Two persons talk (D3:1).\n"}, e)
+	if want = (retrieval{Seen: 1}); got != want {
+		t.Errorf("measure of a comment line = %+v, want %+v", got, want)
+	}
+	// A search that finds only a directory is a search without a document.
+	got = measure([]string{"no results found\ndirectories:\n  /conversations/c/    Two persons talk (D3:1).\n", "no results found\n"}, e)
+	if want = (retrieval{Searches: 2, Empty: 2, Repeated: 1}); got != want {
+		t.Errorf("measure of a result with only a directory = %+v, want %+v", got, want)
 	}
 }
 

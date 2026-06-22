@@ -18,7 +18,12 @@
 #   THINKING   pi thinking level for the answers; default: the pi default
 #   GUIDE      file copied to the workspace as AGENTS.md in rolio mode
 #   OUT        result directory; a run with the same OUT continues that run
-#   See ../withserver.sh for the server options.
+#   ROLIO_SUMMARY_URL, ROLIO_SUMMARY_MODEL
+#              rolio mode only. The server generates the summaries of the
+#              history with this model, and the questions start when all
+#              summaries are complete. Default: no summaries
+#   SUMMARY_WAIT  maximum time in seconds for the summaries; default: 3600
+#   See ../withserver.sh for the other server options.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -90,6 +95,32 @@ if [ "$mode" = rolio ]; then
 	"$bench" "$name" ingest "${selection[@]}"
 	guide="${GUIDE:-$repo/test/agentloop/guide.md}"
 	[ "$guide" = none ] || cp "$guide" "$workspace/AGENTS.md"
+	if [ -n "${ROLIO_SUMMARY_URL:-}" ] && [ -n "${ROLIO_SUMMARY_MODEL:-}" ]; then
+		echo "== summaries"
+		# The root is the last job of the summary queue.
+		limit="${SUMMARY_WAIT:-3600}"
+		start=$SECONDS
+		while :; do
+			state="$(rolio summary / 2>/dev/null | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p' || true)"
+			[ "$state" = ready ] && break
+			if [ "$state" = failed ]; then
+				echo "the summary of / failed: $(rolio summary /)" >&2
+				exit 1
+			fi
+			if [ $((SECONDS - start)) -ge "$limit" ]; then
+				echo "the summaries are not complete after $limit seconds (status of /: ${state:-unknown}); set SUMMARY_WAIT" >&2
+				exit 1
+			fi
+			sleep 2
+		done
+		# The root has no summary when the generations below it failed.
+		rolio abstract / >/dev/null 2>&1 || { echo "the summary of / is empty; see $ROLIO_RUN/server.log" >&2; exit 1; }
+		echo "summaries complete after $((SECONDS - start)) seconds"
+		# An attempt that fails and a later attempt that succeeds are in the
+		# log too, thus this is not an error.
+		failed="$(grep -c 'attempt .* failed' "$ROLIO_RUN/server.log" || true)"
+		[ "$failed" = 0 ] || echo "warning: $failed summary generations failed; see $ROLIO_RUN/server.log" >&2
+	fi
 else
 	"$bench" "$name" ingest "${selection[@]}" --dir "$workspace"
 fi

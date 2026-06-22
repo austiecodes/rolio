@@ -74,7 +74,9 @@ the HTTP response also includes parsed `body` and `metadata` for the UI.
 
 L0/L1 are derived views. The original documents are the only stored truth. The
 reserved read paths of a directory are `.abstract.md` and `.overview.md`; they
-are not editable source documents or ordinary search hits.
+are not editable source documents or ordinary search hits. Search uses the
+summaries to find and order documents, and shows them: see
+[Language and search](#language-and-search).
 
 Configure a Chat Completions-compatible model to enable generation:
 
@@ -159,8 +161,60 @@ Chinese text is indexed as Han unigrams and overlapping bigrams without requirin
 a PostgreSQL extension. English mode additionally uses PostgreSQL's English
 stemmer; Chinese mode uses `simple` for Latin words. Both modes accept mixed
 Chinese/English text. This is lexical retrieval, not semantic/vector search or
-dictionary-based Chinese word segmentation. Search returns an original-content
-excerpt rather than guaranteed highlighted matches.
+dictionary-based Chinese word segmentation.
+
+`rolio search "<words>"` uses the three context layers:
+
+- A document is a result when its text or its own summary contains one or more
+  of the words. Documents with more of the words come first, thus documents with
+  all words are at the top. A run of Chinese characters is searched as its
+  bigrams; one Chinese character alone is searched as that character.
+- Documents with the same number of words are ordered by a score: the rank of
+  the text, plus a part of the rank of the summary of the document, plus a
+  smaller part of the best rank of the summaries of its directories. Thus a
+  directory whose summary agrees with the query moves its documents up.
+- Each result shows the abstract (L0) of the document, when it has one, and a
+  maximum of 3 passages: the lines of the document body that agree best with the
+  query. A line that is longer than 480 characters is cut into parts, and `...`
+  shows where the line continues. A later part starts with the label of its
+  line, for example `[user]: ... `, when the line has one: the text to the first
+  `: ` in the first 40 characters. The stemmer of the index also applies to the
+  passages, with one exception: a query with `die`, `lie`, or `tie` does not
+  show the lines with `dying`, `lying`, or `tying`, and the reverse.
+  Frontmatter is searched, but it is not a passage. Only the lines that can
+  agree with the query are ranked, to a maximum of 2000 lines for a document
+  and 20000 lines for a search. Thus a result can be without a passage: for a
+  match in the path, the frontmatter, or the summary, and for the exceptions
+  and limits above.
+- The passages are excerpts. When more lines of the document agree with the
+  query than the passages that are shown, the result has the line
+  `(N more lines match; rolio cat <path> shows the document)`. `N+` tells that
+  the search did not examine all lines of the document because of the limits
+  above, thus the number is a lower limit.
+- An abstract is shown only when the summary is ready. A stale or failed
+  summary can be about an older text: it is used to find and order documents,
+  and its abstract is not shown.
+- After the documents, the output lists a maximum of 3 directories whose
+  summaries agree with the query. Read one with `rolio overview <directory>`.
+  When no document agrees, the output is the line `no results found` and then
+  these directories, if there are some.
+
+```text
+/projects/payment/retry.md    [rank: 0.38, 1.2KB]
+  abstract: How the payment service retries a failed charge.
+  > The payment service retries a failed charge three times.
+  (4 more lines match; rolio cat /projects/payment/retry.md shows the document)
+
+directories:
+  /projects/payment/    Knowledge about the payment service.
+```
+
+The default is 10 results and the maximum is 100; use `--limit`, `--offset`,
+and `--path <directory>`. Only the first 16 different words of a query are used.
+`--json` gives the same data with the fields `abstract`, `passages`, `snippet`
+(the passages as one text), `more_lines`, `more_lines_min` (true for a lower
+limit), and `directories`. Without a model there are no
+summaries: search then uses only the text and shows only the passages.
 
 After changing `language`, restart the server, then run:
 
@@ -169,8 +223,9 @@ rolio reindex
 ```
 
 Reindex rebuilds parsed metadata and search vectors transactionally for all
-existing documents. Search rejects an incomplete or mismatched index until it is
-rebuilt. With a model, the server generates all summaries again in the new
+existing documents and summaries. Search rejects an incomplete or mismatched
+document index until it is rebuilt. The server builds the search vectors of the
+summaries for the configured language at its start. With a model, the server generates all summaries again in the new
 language at its start. Without a model, summaries in the old language show as
 stale. Run a single configured language per database/schema.
 
@@ -186,7 +241,8 @@ creates. `rm` recursively deletes a directory; deleting `/` is forbidden.
 
 | API | Purpose |
 | --- | --- |
-| `GET /v1/ls`, `/tree`, `/cat`, `/stat`, `/grep`, `/find`, `/glob`, `/search` | Browse and search |
+| `GET /v1/ls`, `/tree`, `/cat`, `/stat`, `/grep`, `/find`, `/glob` | Browse |
+| `GET /v1/search?q=...&path=/...&limit=10&offset=0` | Search text and summaries (`limit` is 100 or less); returns `results` (with `abstract`, `passages`), `directories`, `total` |
 | `PUT /v1/write`, `/v1/edit` | Create, replace, or edit |
 | `DELETE /v1/delete` | Delete a file or subtree |
 | `GET /v1/summary?path=/...` | Inspect the summary of a path and its freshness |

@@ -8,7 +8,19 @@ that must stay available after this session and outside this repository.
 Before you investigate an unfamiliar system, API, or recurring problem, look
 for existing knowledge:
 
-- `rolio search "<keywords>"` finds documents in the full tree.
+- `rolio search "<words>"` finds documents in the full tree. For each
+  document it shows the lines that match. Frequently these lines are the
+  answer to a question about one fact.
+- The lines under a result are excerpts, a maximum of three for a document.
+  `(N more lines match; rolio cat <path> shows the document)` tells that the
+  document has more. When the question needs a complete list, or the text
+  before or after a line, read the document with `rolio cat`.
+- `rolio search "<words>" --path <dir>` searches only below one directory.
+- When a search result shows an `abstract:` line or lists a directory, the
+  tree has summaries: `rolio abstract <path>` and `rolio overview <path>` give
+  the short and the long summary of that document or directory. Read them
+  before `rolio cat`. Without these lines in the result, do not use the two
+  commands.
 - `rolio tree / -L 3` shows the structure.
 - `rolio cat <path>` reads one document.
 
